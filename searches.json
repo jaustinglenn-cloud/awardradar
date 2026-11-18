@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.4",
+  "max_slots_guardrail": 5,
+  "home_default": "DFW",
+  "home_alternate": "DAL",
+  "updated_at": "2026-11-18T18:55:12.536Z",
+  "transfer_bonuses": {
+    "Flying Blue": 25,
+    "British Airways Avios": 30,
+    "Iberia Plus": 30,
+    "Virgin Atlantic": 0,
+    "Air Canada Aeroplan": 0
+  },
+  "searches": [
+    {
+      "id": 1,
+      "origin": "DFW",
+      "destination": "MXP",
+      "date": "2027-09-10",
+      "flex": true,
+      "cabin": "Both",
+      "seats": 2,
+      "notes": "Northern Italy Lake Como & Dolomites Outbound"
+    },
+    {
+      "id": 2,
+      "origin": "VCE",
+      "destination": "DFW",
+      "date": "2027-09-18",
+      "flex": true,
+      "cabin": "Both",
+      "seats": 2,
+      "notes": "Northern Italy Venice Open-Jaw Return"
+    },
+    {
+      "id": 3,
+      "origin": "DFW",
+      "destination": "BLQ",
+      "date": "2027-09-11",
+      "flex": true,
+      "cabin": "Business",
+      "seats": 2,
+      "notes": "Modena & Bologna Food Hub Alternate"
+    },
+    {
+      "id": 4,
+      "origin": "DAL",
+      "destination": "LGB",
+      "date": "2026-12-24",
+      "flex": false,
+      "cabin": "Economy",
+      "seats": 2,
+      "notes": "LA Christmas Holiday Outbound (Love Field → Long Beach)"
+    },
+    {
+      "id": 5,
+      "origin": "LAX",
+      "destination": "DFW",
+      "date": "2026-12-31",
+      "flex": true,
+      "cabin": "Both",
+      "seats": 2,
+      "notes": "LA New Year's Eve Return"
+    }
+  ]
+}
