@@ -3,12 +3,12 @@
   "max_slots_guardrail": 5,
   "home_default": "DFW",
   "home_alternate": "DAL",
-  "updated_at": "2026-11-18T19:29:00.670Z",
+  "updated_at": "2026-11-18T19:41:49.651Z",
   "transfer_bonuses": {
-    "Flying Blue": 25,
+    "Virgin Atlantic": 40,
     "British Airways Avios": 30,
     "Iberia Plus": 30,
-    "Virgin Atlantic": 0,
+    "Flying Blue": 0,
     "Air Canada Aeroplan": 0
   },
   "searches": [
