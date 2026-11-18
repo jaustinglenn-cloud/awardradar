@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-11-18T20:26:57.065219+00:00",
+  "generated_at": "2026-11-18T20:46:09.122372+00:00",
   "runner": "GitHub Actions (fast-flights + Playwright aa.com + Frequent Miler Live Bonuses)",
   "active_slots_scanned": 5,
   "live_transfer_bonuses": {
     "Virgin Atlantic": {
       "pct": 40,
       "expires": "2026-12-30",
-      "source": "https://www.doctorofcredit.com/chase-ultimate-rewards-40-transfer-bonus-to-virgin-atlantic-11-4-4/"
+      "source": "https://frequentmiler.com/current-point-transfer-bonuses/"
     },
     "British Airways Avios": {
       "pct": 30,
@@ -16,15 +16,15 @@
     "Iberia Plus": {
       "pct": 30,
       "expires": "2026-12-01",
-      "source": "https://www.pointsyeah.com/insider/deals/current-credit-card-transfer-bonuses"
+      "source": "https://frequentmiler.com/current-point-transfer-bonuses/"
     },
     "Flying Blue": {
-      "pct": 0,
+      "pct": 20,
       "expires": null,
       "source": "https://frequentmiler.com/current-point-transfer-bonuses/"
     },
     "Air Canada Aeroplan": {
-      "pct": 0,
+      "pct": 20,
       "expires": null,
       "source": "https://frequentmiler.com/current-point-transfer-bonuses/"
     }
