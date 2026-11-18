@@ -3,13 +3,21 @@
   "max_slots_guardrail": 5,
   "home_default": "DFW",
   "home_alternate": "DAL",
-  "updated_at": "2026-11-18T19:41:49.651Z",
+  "updated_at": "2026-11-18T20:02:01.173Z",
   "transfer_bonuses": {
     "Virgin Atlantic": 40,
     "British Airways Avios": 30,
     "Iberia Plus": 30,
     "Flying Blue": 0,
     "Air Canada Aeroplan": 0
+  },
+  "alert_rules": {
+    "min_stars": 4,
+    "min_cpp": 0,
+    "max_points_per_person": 65000,
+    "cabin": "all",
+    "ecosystem": "all",
+    "alert_on_low_cash": true
   },
   "searches": [
     {
