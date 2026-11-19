@@ -13,9 +13,7 @@
     "British Airways",
     "Air France",
     "KLM",
-    "Virgin Atlantic",
-    "Southwest Airlines",
-    "United Airlines"
+    "Virgin Atlantic"
   ],
   "alert_config": {
     "min_grade": 4,
@@ -69,24 +67,6 @@
       "max_points": 25000,
       "min_cpp": 1.5,
       "dates": "2026-12-24 to 2026-12-31",
-      "currencies": [
-        "Chase UR",
-        "American AAdvantage",
-        "Delta SkyMiles"
-      ],
-      "active": true
-    },
-    {
-      "id": "cfg-1795098355740",
-      "name": "Tucson Trip",
-      "origin": "DFW,DAL",
-      "destination": "TUS,PHX",
-      "start_date": "2027-02-28",
-      "end_date": "2027-04-01",
-      "cabin": "Premium Economy",
-      "max_points": 25000,
-      "min_cpp": 2,
-      "dates": "2027-02-28 to 2027-04-01",
       "currencies": [
         "Chase UR",
         "American AAdvantage",
