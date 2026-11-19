@@ -772,47 +772,41 @@ def send_ntfy_notification(alert_deals, unicorns, total_count, matched_count):
     ntfy_topic = re.sub(r"^https?://ntfy\.sh/", "", raw_topic, flags=re.I).strip("/")
     if not ntfy_topic:
         print("[Alerts] No NTFY_TOPIC or NFTY_TOPIC secret configured — skipping push.")
-        return
+        return "skipped: no NTFY_TOPIC/NFTY_TOPIC secret"
 
     is_manual_run = os.environ.get("GITHUB_EVENT_NAME", "") == "workflow_dispatch"
     if not alert_deals:
         if not is_manual_run:
             print("[Alerts] No deals met alert threshold today.")
-            return
-        title = f"AwardRadar Scan Complete ({total_count} Live Flights)"
-        body = f"Scanned your itineraries ({matched_count} matches, {total_count} total live flights). No Grade 4-5 deals or DFW/DAL Unicorns crossed your alert threshold on this run."
+            return "skipped: 0 deals met threshold"
+        title = f"AwardRadar: {total_count} Flights Scanned"
+        body = f"Scanned {matched_count} itinerary match(es) ({total_count} total live flights). None crossed your alert grade on this run."
         priority = "default"
+        click_url = "https://jaustinglenn-cloud.github.io/awardradar/"
     else:
         entries = []
         for d in alert_deals[:5]:
             stars = "★" * int(d["grade"]) + "☆" * (5 - int(d["grade"]))
-            deal_url = d.get("google_flights_url") or d.get("url") or "https://www.google.com/travel/flights"
             date_str = d.get("travel_date") or d.get("dates") or "Flexible"
-            airline_str = d.get("airline") or d.get("program") or "Airline"
+            airline_str = (d.get("airline") or d.get("program") or "Airline").split("/")[0].strip()
             entries.append(
                 f"{stars} | {d['miles']:,} pts | {d['origin']} -> {d['destination']}\n"
-                f"{date_str} | {airline_str} | [View Deal]({deal_url})"
+                f"{date_str} | {airline_str} | {d['cpp']}c CPP"
             )
+        entries.append("Tap notification to open AwardRadar & deal links")
         body = "\n\n".join(entries)
         title = f"AwardRadar: {len(alert_deals)} Flight{'s' if len(alert_deals) != 1 else ''} Identified"
         priority = "urgent" if unicorns else "high"
+        click_url = "https://jaustinglenn-cloud.github.io/awardradar/"
 
     safe_title = title.encode("ascii", "ignore").decode("ascii")
-    action_btns = []
-    for d in alert_deals[:3]:
-        u = d.get("google_flights_url") or d.get("url") or "https://www.google.com/travel/flights"
-        lbl = f"{d['origin']}-{d['destination']} ({(d.get('airline') or 'Flight').split('/')[0].strip()[:12]})"
-        action_btns.append(f"view, {lbl}, {u}")
+    # Proven iOS-compatible ntfy headers (no Markdown header or complex Actions that iOS APNs silently drops)
     headers = {
         "Title": safe_title,
         "Priority": priority,
         "Tags": "airplane,star",
-        "Markdown": "yes",
-        "Click": "https://jaustinglenn-cloud.github.io/awardradar/",
+        "Click": click_url,
     }
-    if action_btns:
-        headers["Actions"] = "; ".join(action_btns)
-
     try:
         resp = requests.post(
             f"https://ntfy.sh/{ntfy_topic}",
@@ -820,15 +814,12 @@ def send_ntfy_notification(alert_deals, unicorns, total_count, matched_count):
             headers=headers,
             timeout=15,
         )
-        print(f"[Alerts] ntfy.sh push to '{ntfy_topic}' -> HTTP {resp.status_code} (manual={is_manual_run})")
-        if resp.status_code >= 400:
-            print(f"[Alerts] ntfy error body: {resp.text[:250]} — retrying plain text...")
-            fallback_headers = {"Title": safe_title, "Priority": priority, "Tags": "airplane,star"}
-            r2 = requests.post(f"https://ntfy.sh/{ntfy_topic}", data=body.encode("utf-8"), headers=fallback_headers, timeout=15)
-            print(f"[Alerts] ntfy plain fallback -> HTTP {r2.status_code}")
+        status_str = f"HTTP {resp.status_code} ({len(alert_deals)} alert(s))"
+        print(f"[Alerts] ntfy.sh push to '{ntfy_topic}' -> {status_str} (manual={is_manual_run})")
+        return status_str
     except Exception as e:
         print(f"[Alerts] ntfy.sh failed: {e}")
-
+        return f"error: {e}"
 
 def main():
     print("=== AwardRadar Zero-Cost Engine Starting ===")
@@ -881,14 +872,6 @@ def main():
     final_deals = (matched_list[:20] + other_list[:15])
     final_deals.sort(key=lambda d: (d["grade"], CABIN_PRIORITY.get(d["cabin"], 1), d["cpp"]), reverse=True)
 
-    os.makedirs(os.path.dirname(DEALS_FILE), exist_ok=True)
-    with open(DEALS_FILE, "w", encoding="utf-8") as f:
-        json.dump({
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "total_count": len(final_deals),
-            "deals": final_deals,
-        }, f, indent=2)
-
     alert_deals = []
     unicorns = []
     for d in final_deals:
@@ -898,8 +881,19 @@ def main():
         elif d["matched_search"] and d["grade"] >= min_grade:
             alert_deals.append(d)
 
-    print(f"=== Saved {len(final_deals)} flights ({len(matched_list)} itinerary matches, {len(unicorns)} DFW/DAL unicorns) ===")
-    send_ntfy_notification(alert_deals, unicorns, len(final_deals), len(matched_list))
+    ntfy_status = send_ntfy_notification(alert_deals, unicorns, len(final_deals), len(matched_list))
+
+    os.makedirs(os.path.dirname(DEALS_FILE), exist_ok=True)
+    with open(DEALS_FILE, "w", encoding="utf-8") as f:
+        json.dump({
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "app_version": "v2.4",
+            "ntfy_status": ntfy_status,
+            "total_count": len(final_deals),
+            "deals": final_deals,
+        }, f, indent=2)
+
+    print(f"=== Saved {len(final_deals)} flights ({len(matched_list)} itinerary matches, {len(unicorns)} DFW/DAL unicorns, ntfy={ntfy_status}) ===")
 
 
 if __name__ == "__main__":
