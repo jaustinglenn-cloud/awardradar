@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 """
-AwardRadar — 5-Layer Zero-Cost Award Flight Waterfall Engine
+AwardRadar — Zero-Cost Multi-Source Award & Live Itinerary Engine
 Runs daily via GitHub Actions (or on-demand via workflow_dispatch).
 
-Features:
-  - Enforces max_itineraries quota cap from searches.json
-  - Grades every flight 1-5:
-      1 = Average deal found any time of year
-      2 = Google Flights "Low" unusual price
-      3 = Solid saver deal
-      4 = Tremendous award value (>4.0 CPP Business/First or >=2.0 CPP Economy)
-      5 = Unicorn deal (<1x/year — stupid not to take it)
-  - Alerts on Grade 5 Unicorn deals departing DFW or DAL even outside configured itineraries
-  - Sorts Live Flights by Grade (5 -> 1), prioritizing Business/First while keeping Economy deals
+Layers:
+  0. Direct Active Itinerary Scanner: Actively queries EVERY configured itinerary in searches.json
+     (Business/First prioritized + Economy) via SerpApi Google Flights (if SERPAPI_API_KEY is set)
+     and/or fast-flights (free Google Flights Protobuf), mapping live flights to Chase UR,
+     American AAdvantage, and Delta SkyMiles partner award charts.
+  1. PointsYeah Insider Deals, Flying Blue Promo Rewards & MilesFeed Aggregator
+  2. 13 Curated Award & Flight Deal RSS Feeds
+  3. Real-time r/awardtravel & r/flights JSON feeds
+  4. Optional Seats.aero Partner API hook (if SEATS_AERO_API_KEY is set)
+  5. 1-5 Deal Grading & ntfy.sh iPhone Push Alerts (supports NTFY_TOPIC or NFTY_TOPIC)
 """
 
 import os
 import re
 import json
+import math
 import hashlib
-import smtplib
-from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus
 
@@ -47,7 +46,7 @@ BROWSER_HEADERS = {
 }
 
 REDDIT_HEADERS = {
-    "User-Agent": "AwardRadarBot/2.1 (by /u/awardradar_app; zero-cost personal tracker)"
+    "User-Agent": "AwardRadarBot/2.2 (by /u/awardradar_app; zero-cost personal tracker)"
 }
 
 CITY_TO_IATA = {
@@ -62,6 +61,11 @@ CITY_TO_IATA = {
     "tokyo": "HND", "haneda": "HND", "narita": "NRT", "osaka": "KIX",
     "seoul": "ICN", "singapore": "SIN", "doha": "DOH", "dubai": "DXB",
     "sydney": "SYD", "auckland": "AKL", "cancun": "CUN", "honolulu": "HNL",
+}
+
+LONG_HAUL_AIRPORTS = {
+    "ZRH", "MXP", "VCE", "FCO", "CDG", "LHR", "AMS", "FRA", "MUC", "MAD", "BCN",
+    "LIS", "DUB", "HND", "NRT", "KIX", "ICN", "SIN", "DOH", "DXB", "SYD", "AKL",
 }
 
 REGION_MAP = {
@@ -95,9 +99,7 @@ PROGRAM_CURRENCIES = {
     "American AAdvantage": ["American AAdvantage", "Bilt"],
     "Delta SkyMiles": ["Delta SkyMiles", "Amex MR"],
     "Southwest Rapid Rewards": ["Chase UR"],
-    "ANA Mileage Club": ["Amex MR"],
-    "Singapore KrisFlyer": ["Chase UR", "Amex MR", "Capital One", "Citi TYP"],
-    "Emirates Skywards": ["Chase UR", "Amex MR", "Capital One", "Citi TYP", "Bilt"],
+    "Chase Travel Portal": ["Chase UR"],
 }
 
 AWARD_KEYWORDS = [
@@ -123,18 +125,11 @@ RSS_FEEDS = [
     ("Secret Flying", "https://www.secretflying.com/feed/"),
 ]
 
-HEURISTIC_CASH = {
-    "First": 8500,
-    "Business": 3600,
-    "Premium Economy": 1650,
-    "Economy": 680,
-}
-
+HEURISTIC_CASH = {"First": 8500, "Business": 3600, "Premium Economy": 1650, "Economy": 680}
 CABIN_PRIORITY = {"First": 4, "Business": 3, "Premium Economy": 2, "Economy": 1}
 
 
 def load_config():
-    """Supports both v2 object schema and legacy array searches.json."""
     default_cfg = {
         "max_itineraries": 4,
         "global_partners": ["Chase UR", "American AAdvantage", "Delta SkyMiles"],
@@ -192,10 +187,10 @@ def extract_program_and_airline(text):
         ("air france", "Air France/KLM Flying Blue", "Air France"),
         ("klm", "Air France/KLM Flying Blue", "KLM"),
         ("virgin atlantic", "Virgin Atlantic", "Virgin Atlantic"),
-        ("aeroplan", "Air Canada Aeroplan", "Air Canada / Partners"),
+        ("aeroplan", "Air Canada Aeroplan", "Air Canada"),
         ("qsuite", "Qatar Privilege Club", "Qatar Airways"),
         ("qatar", "Qatar Privilege Club", "Qatar Airways"),
-        ("avios", "British Airways Avios", "British Airways / Iberia"),
+        ("avios", "British Airways Avios", "British Airways"),
         ("british", "British Airways Avios", "British Airways"),
         ("ana", "Virgin Atlantic", "ANA"),
         ("jal", "American AAdvantage", "Japan Airlines"),
@@ -205,13 +200,46 @@ def extract_program_and_airline(text):
         ("united", "United MileagePlus", "United Airlines"),
         ("american", "American AAdvantage", "American Airlines"),
         ("aadvantage", "American AAdvantage", "American Airlines"),
-        ("emirates", "Emirates Skywards", "Emirates"),
-        ("singapore", "Singapore KrisFlyer", "Singapore Airlines"),
+        ("lufthansa", "Air Canada Aeroplan", "Lufthansa"),
+        ("swiss", "Air Canada Aeroplan", "SWISS"),
     ]
     for key, prog, airline in mapping:
         if key in low:
             return prog, airline
-    return "Partner Award Program", "Major Alliance Carrier"
+    return "Chase Travel Portal", "Major Carrier"
+
+
+def map_carrier_award_estimate(airline_name, origin, dest, cabin, cash_price):
+    is_lh = (origin in LONG_HAUL_AIRPORTS) or (dest in LONG_HAUL_AIRPORTS)
+    low = (airline_name or "").lower()
+    if "iberia" in low:
+        pts = 50500 if (is_lh and cabin in ("Business", "First")) else (20000 if is_lh else 11000)
+        return "Iberia Plus", pts, 185 if is_lh else 6
+    if "british" in low:
+        pts = 60000 if (is_lh and cabin in ("Business", "First")) else (22500 if is_lh else 11000)
+        return "British Airways Avios", pts, 350 if is_lh else 6
+    if "american" in low or "finnair" in low:
+        pts = 57500 if (is_lh and cabin in ("Business", "First")) else (22500 if is_lh else 11000)
+        return "American AAdvantage", pts, 120 if is_lh else 6
+    if "air france" in low or "klm" in low:
+        pts = 55000 if (is_lh and cabin in ("Business", "First")) else (20000 if is_lh else 12000)
+        return "Air France/KLM Flying Blue", pts, 220 if is_lh else 6
+    if "delta" in low:
+        if is_lh:
+            pts = 50000 if cabin in ("Business", "First") else 30000
+            return "Virgin Atlantic", pts, 250
+        return "Delta SkyMiles", 15000 if cabin == "Economy" else 35000, 6
+    if "virgin" in low:
+        pts = 47500 if (is_lh and cabin in ("Business", "First")) else 15000
+        return "Virgin Atlantic", pts, 260 if is_lh else 6
+    if "southwest" in low:
+        pts = max(5500, int(cash_price / 0.014))
+        return "Southwest Rapid Rewards", pts, 6
+    if any(k in low for k in ("united", "lufthansa", "swiss", "air canada", "austrian")):
+        pts = 70000 if (is_lh and cabin in ("Business", "First")) else (35000 if is_lh else 12500)
+        return "Air Canada Aeroplan", pts, 95 if is_lh else 6
+    portal_pts = max(5000, math.ceil(cash_price / 0.0125))
+    return "Chase Travel Portal", portal_pts, 6
 
 
 def extract_route(text):
@@ -238,14 +266,6 @@ def extract_route(text):
 
 
 def compute_deal_grade(cpp, cabin, miles, price_level="typical"):
-    """
-    1-5 Deal Grading Scale:
-      5: Unicorn deal (<1x/year, stupid not to take it)
-      4: Tremendous award value (>4.0 CPP Business/First, >=2.0 CPP Economy)
-      3: Solid above-average deal
-      2: Equivalent to Google Flights "Low" unusual price
-      1: Average deal found any time of year
-    """
     is_premium = cabin in ("Business", "First")
     is_low = (price_level == "low")
     if is_premium:
@@ -295,7 +315,7 @@ def build_airline_url(airline, origin, dest, travel_date):
     if "southwest" in low:
         return f"https://www.southwest.com/air/booking/select.html?originationAirportCode={o}&destinationAirportCode={d}&departureDate={dt_str}&fareType=POINTS"
     if "united" in low:
-        return f"https://www.united.com/en/us/fsr/choose-flights?f={o}&t={d}&d={dt_str}&tt=1&at=1&px=1&taxng=1&newHP=True&clm=7&st=bestmatches"
+        return f"https://www.united.com/en/us/fsr/choose-flights?f={o}&t={d}&d={dt_str}&tt=1&at=1&px=1&taxng=1"
     return f"https://www.google.com/travel/flights?q={quote_plus(f'Flights to {d} from {o} on {dt_str} oneway {airline}')}"
 
 
@@ -316,46 +336,212 @@ def build_links(origin, dest, source_url, cabin="Business", airline="", travel_d
 
 
 def make_deal(title, source, url, origin=None, dest=None, cabin=None, miles=None, taxes=195,
-              dates="Select Dates (Next 90 Days)", program=None, airline=None, flights_taken=None):
+              dates="Select Dates (Next 90 Days)", program=None, airline=None, flights_taken=None,
+              flight_times="Check schedule", travel_date=None, cash_benchmark=None, price_level="typical",
+              verified=False, matched_search=False, itinerary_name=None):
     o, d = (origin, dest) if (origin and dest) else extract_route(title)
     cab = cabin or extract_cabin(title)
     pts = miles or extract_miles(title) or (55000 if cab == "Business" else 75000 if cab == "First" else 18000)
     prog, air = (program, airline) if (program and airline) else extract_program_and_airline(title)
     currencies = PROGRAM_CURRENCIES.get(prog, ["Chase UR", "American AAdvantage", "Delta SkyMiles"])
-    m_date = re.search(r"(\d{4}-\d{2}-\d{2})", str(dates or ""))
+    m_date = re.search(r"(\d{4}-\d{2}-\d{2})", str(travel_date or dates or ""))
     t_date = m_date.group(1) if m_date else (datetime.now(timezone.utc) + timedelta(days=45)).strftime("%Y-%m-%d")
     links = build_links(o, d, url, cabin=cab, airline=air, travel_date=t_date)
-    uid = hashlib.md5(f"{o}-{d}-{cab}-{pts}-{title[:45]}".encode("utf-8")).hexdigest()[:12]
+    uid = hashlib.md5(f"{o}-{d}-{cab}-{pts}-{t_date}-{air}-{title[:35]}".encode("utf-8")).hexdigest()[:12]
 
     return {
         "id": uid,
         "title": title.strip()[:140],
-        "itinerary_name": f"{o} → {d}",
+        "itinerary_name": itinerary_name or f"{o} → {d}",
         "origin": o,
         "origin_name": AIRPORT_NAMES.get(o, o),
         "destination": d,
         "destination_name": AIRPORT_NAMES.get(d, d),
         "airline": air,
         "flights_taken": flights_taken or f"{air} ({o} → {d})",
+        "flight_times": flight_times or "Check schedule",
+        "travel_date": t_date,
         "program": prog,
         "cabin": cab,
         "miles": pts,
         "taxes": taxes,
-        "cash_benchmark": None,
-        "price_level": "typical",
+        "cash_benchmark": cash_benchmark,
+        "price_level": price_level,
         "cpp": None,
         "grade": 1,
         "grade_label": "Average Year-Round",
-        "verified": False,
+        "verified": verified,
         "dates": dates,
         "transfer_currencies": currencies,
         "source": source,
         "url": url,
         **links,
-        "matched_search": False,
+        "matched_search": matched_search,
         "is_unicorn_dfw_dal": False,
         "found_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _query_serpapi_flights(origin, dest, travel_date, cabin, api_key):
+    if not api_key:
+        return []
+    travel_class = 4 if cabin == "First" else (3 if cabin == "Business" else (2 if cabin == "Premium Economy" else 1))
+    params = {
+        "engine": "google_flights",
+        "departure_id": origin,
+        "arrival_id": dest,
+        "outbound_date": travel_date,
+        "type": 2,
+        "travel_class": travel_class,
+        "adults": 1,
+        "currency": "USD",
+        "hl": "en",
+        "api_key": api_key,
+    }
+    try:
+        resp = requests.get("https://serpapi.com/search.json", params=params, timeout=25)
+        data = resp.json()
+        if resp.status_code != 200 or "error" in data:
+            return []
+        price_level = str((data.get("price_insights") or {}).get("price_level", "typical") or "typical").lower()
+        if price_level not in ("low", "typical", "high"):
+            price_level = "typical"
+        rows = []
+        for grp in ((data.get("best_flights") or []) + (data.get("other_flights") or []))[:3]:
+            price = grp.get("price")
+            legs = grp.get("flights") or []
+            if not isinstance(price, (int, float)) or not legs:
+                continue
+            airlines = []
+            fnums = []
+            for leg in legs:
+                a = str(leg.get("airline", "")).strip()
+                fn = str(leg.get("flight_number", "")).strip()
+                if a and a not in airlines:
+                    airlines.append(a)
+                if fn:
+                    fnums.append(fn)
+            dep_t = str((legs[0].get("departure_airport") or {}).get("time", "")).strip()
+            arr_t = str((legs[-1].get("arrival_airport") or {}).get("time", "")).strip()
+            mins = int(grp.get("total_duration") or 0)
+            dur = f"{mins // 60}h {mins % 60}m" if mins else ""
+            stops = max(0, len(legs) - 1)
+            stop_lbl = "Nonstop" if stops == 0 else f"{stops} stop{'s' if stops != 1 else ''}"
+            rows.append({
+                "airline": " / ".join(airlines) or "Carrier",
+                "flights_taken": f"{' / '.join(fnums) or 'Live Flight'} • {stop_lbl}{(', ' + dur) if dur else ''}",
+                "flight_times": f"{dep_t} → {arr_t}" if dep_t else "Check schedule",
+                "cash": int(price),
+                "price_level": price_level,
+                "source": "Google Flights (SerpApi)",
+            })
+        return rows
+    except Exception as e:
+        print(f"[Layer 0] SerpApi error {origin}->{dest}: {e}")
+        return []
+
+
+def _query_fast_flights(origin, dest, travel_date, cabin):
+    if not HAS_FAST_FLIGHTS:
+        return []
+    seat_map = {"First": "first", "Business": "business", "Premium Economy": "premium-economy", "Economy": "economy"}
+    try:
+        res = get_flights(
+            flight_data=[FlightData(date=travel_date, from_airport=origin, to_airport=dest)],
+            trip="one-way",
+            seat=seat_map.get(cabin, "business"),
+            passengers=Passengers(adults=1),
+            fetch_mode="fallback",
+        )
+        price_level = str(getattr(res, "current_price", "typical") or "typical").lower()
+        if price_level not in ("low", "typical", "high"):
+            price_level = "typical"
+        rows = []
+        for fl in getattr(res, "flights", [])[:3]:
+            digits = re.sub(r"[^\d]", "", str(getattr(fl, "price", "")))
+            if not digits:
+                continue
+            val = int(digits)
+            if not (60 <= val <= 25000):
+                continue
+            airline = str(getattr(fl, "name", "Carrier") or "Carrier").strip()
+            dep_t = str(getattr(fl, "departure", "") or "").strip()
+            arr_t = str(getattr(fl, "arrival", "") or "").strip()
+            dur = str(getattr(fl, "duration", "") or "").strip()
+            stops = getattr(fl, "stops", "")
+            stop_lbl = "Nonstop" if str(stops) == "0" else f"{stops} stop(s)"
+            rows.append({
+                "airline": airline,
+                "flights_taken": f"{airline} • {stop_lbl}{(', ' + dur) if dur else ''}",
+                "flight_times": f"{dep_t} → {arr_t}" if dep_t else "Check schedule",
+                "cash": val,
+                "price_level": price_level,
+                "source": "Google Flights Live",
+            })
+        return rows
+    except Exception as e:
+        print(f"[Layer 0] fast-flights error {origin}->{dest}: {e}")
+        return []
+
+
+def layer0_direct_itineraries(searches):
+    """Actively scans EVERY configured itinerary (Business/First + Economy) so user routes always appear."""
+    deals = []
+    serpapi_key = os.environ.get("SERPAPI_API_KEY", "").strip()
+    today = datetime.now(timezone.utc).date()
+
+    for cfg in searches:
+        if not cfg.get("active", True):
+            continue
+        itin_name = cfg.get("name") or f"{cfg.get('origin')} → {cfg.get('destination')}"
+        origins = [x.strip().upper() for x in str(cfg.get("origin", "")).split(",") if len(x.strip()) == 3][:2]
+        dests = [x.strip().upper() for x in str(cfg.get("destination", "")).split(",") if len(x.strip()) == 3][:2]
+        if not origins or not dests:
+            continue
+
+        # Google Flights only indexes ~330 days out; clamp future dates if >325 days away
+        raw_date = str(cfg.get("start_date") or "").strip()
+        m_dt = re.search(r"(\d{4}-\d{2}-\d{2})", raw_date or str(cfg.get("dates") or ""))
+        if m_dt:
+            req_dt = datetime.strptime(m_dt.group(1), "%Y-%m-%d").date()
+            if (req_dt - today).days > 325:
+                query_date = (today + timedelta(days=300)).strftime("%Y-%m-%d")
+                display_date = f"{m_dt.group(1)} (Benchmarked {query_date})"
+            elif req_dt <= today:
+                query_date = (today + timedelta(days=30)).strftime("%Y-%m-%d")
+                display_date = query_date
+            else:
+                query_date = m_dt.group(1)
+                display_date = query_date
+        else:
+            query_date = (today + timedelta(days=45)).strftime("%Y-%m-%d")
+            display_date = str(cfg.get("dates") or query_date)
+
+        pref_cab = cfg.get("cabin", "Any")
+        cabins = ["Business", "Economy"] if pref_cab == "Any" else [pref_cab]
+
+        for o in origins[:1]:
+            for d in dests[:1]:
+                for cab in cabins:
+                    rows = _query_serpapi_flights(o, d, query_date, cab, serpapi_key)
+                    if not rows:
+                        rows = _query_fast_flights(o, d, query_date, cab)
+                    for r in rows[:2]:
+                        prog, est_pts, est_tax = map_carrier_award_estimate(r["airline"], o, d, cab, r["cash"])
+                        gf_url = build_links(o, d, "", cabin=cab, airline=r["airline"], travel_date=query_date)["google_flights_url"]
+                        deals.append(make_deal(
+                            title=f"{o} → {d} {r['airline']} {cab} (Live Schedule + {prog} Partner Chart)",
+                            source=r["source"],
+                            url=gf_url,
+                            origin=o, dest=d, cabin=cab, miles=est_pts, taxes=est_tax,
+                            dates=display_date, program=prog, airline=r["airline"],
+                            flights_taken=r["flights_taken"], flight_times=r["flight_times"],
+                            travel_date=query_date, cash_benchmark=r["cash"],
+                            price_level=r["price_level"], verified=True,
+                            matched_search=True, itinerary_name=itin_name,
+                        ))
+    print(f"[Layer 0] Direct itinerary scans returned: {len(deals)} live flights")
+    return deals
 
 
 def layer1_pointsyeah_and_promos():
@@ -390,12 +576,11 @@ def layer1_pointsyeah_and_promos():
                 origin="DFW", dest="CDG", cabin="Business", miles=45000, taxes=215,
                 dates="Book this month • Travel next 5 months",
                 program="Air France/KLM Flying Blue", airline="Air France / KLM",
-                flights_taken="AF 159 (Nonstop DFW → CDG)"
+                flights_taken="AF 159 (Nonstop DFW → CDG)",
             ))
     except Exception as e:
         print(f"[Layer 1B] Flying Blue skipped: {e}")
 
-    # 1C: MilesFeed Live Points & Miles Aggregator
     try:
         resp = requests.get("https://milesfeed.com/", headers=BROWSER_HEADERS, timeout=15)
         if resp.status_code == 200:
@@ -411,7 +596,7 @@ def layer1_pointsyeah_and_promos():
                     deals.append(make_deal(txt, "MilesFeed Aggregator", href))
                     if len(seen_mf) >= 6:
                         break
-        print(f"[Layer 1C] MilesFeed scraped: {len(seen_mf)} deals")
+            print(f"[Layer 1C] MilesFeed scraped: {len(seen_mf)} deals")
     except Exception as e:
         print(f"[Layer 1C] MilesFeed skipped: {e}")
     return deals
@@ -477,14 +662,13 @@ def layer3_reddit_awardtravel():
                     deals.append(make_deal(title, sub_name, permalink, miles=miles))
         except Exception as e:
             print(f"[Layer 3] Reddit error ({url}): {e}")
-    print(f"[Layer 3] r/awardtravel extracted: {len(deals)} deals")
+    print(f"[Layer 3] Reddit extracted: {len(deals)} deals")
     return deals
 
 
 def layer4_seats_aero(searches):
     api_key = os.environ.get("SEATS_AERO_API_KEY", "").strip()
     if not api_key:
-        print("[Layer 4] SEATS_AERO_API_KEY not set — skipping optional API hook.")
         return []
     deals = []
     headers = {"Partner-Authorization": api_key, "Accept": "application/json"}
@@ -517,53 +701,17 @@ def layer4_seats_aero(searches):
                                 origin=o, dest=d, cabin=cab, miles=int(row[cost_key]),
                                 dates=row.get("Date", "Next 60 Days"),
                                 program=src_prog, airline=row.get(air_key) or src_prog,
-                                flights_taken=f"{row.get(air_key) or src_prog} • {o} → {d}"
+                                flights_taken=f"{row.get(air_key) or src_prog} • {o} → {d}",
+                                matched_search=True, itinerary_name=cfg.get("name") or f"{o} → {d}",
                             ))
         except Exception as e:
             print(f"[Layer 4] Seats.aero error: {e}")
     return deals
 
 
-def verify_cash_price(origin, dest, cabin):
-    if HAS_FAST_FLIGHTS and len(origin) == 3 and len(dest) == 3:
-        try:
-            target_date = (datetime.now(timezone.utc) + timedelta(days=45)).strftime("%Y-%m-%d")
-            seat_map = {"First": "first", "Business": "business", "Premium Economy": "premium-economy", "Economy": "economy"}
-            result = get_flights(
-                flight_data=[FlightData(date=target_date, from_airport=origin, to_airport=dest)],
-                trip="one-way",
-                seat=seat_map.get(cabin, "business"),
-                passengers=Passengers(adults=1),
-                fetch_mode="fallback",
-            )
-            price_level = str(getattr(result, "current_price", "typical") or "typical").lower()
-            if price_level not in ("low", "typical", "high"):
-                price_level = "typical"
-            prices = []
-            first_flight_desc = None
-            for fl in getattr(result, "flights", [])[:5]:
-                raw = str(getattr(fl, "price", ""))
-                digits = re.sub(r"[^\d]", "", raw)
-                if digits:
-                    val = int(digits)
-                    if 80 <= val <= 25000:
-                        prices.append(val)
-                        if not first_flight_desc:
-                            fname = getattr(fl, "name", "")
-                            dep_t = getattr(fl, "departure", "")
-                            arr_t = getattr(fl, "arrival", "")
-                            dur = getattr(fl, "duration", "")
-                            stops = getattr(fl, "stops", "")
-                            stop_lbl = "Nonstop" if str(stops) == "0" else f"{stops} stop(s)"
-                            first_flight_desc = (f"{fname} • {dur} ({stop_lbl})".strip(), f"{dep_t} → {arr_t}".strip() if dep_t else "Check schedule")
-            if prices:
-                return min(prices), True, price_level, first_flight_desc
-        except Exception:
-            pass
-    return HEURISTIC_CASH.get(cabin, 3200), False, "typical", None
-
-
 def match_itinerary(deal, searches):
+    if deal.get("matched_search"):
+        return True, deal.get("itinerary_name")
     for cfg in searches:
         if not cfg.get("active", True):
             continue
@@ -584,64 +732,51 @@ def match_itinerary(deal, searches):
     return False, None
 
 
-def send_notifications(alert_deals, unicorns):
-    if not alert_deals:
+def send_ntfy_notification(alert_deals, unicorns, total_count):
+    # Accept BOTH NTFY_TOPIC and NFTY_TOPIC so either spelling works seamlessly
+    ntfy_topic = (os.environ.get("NTFY_TOPIC") or os.environ.get("NFTY_TOPIC") or "").strip()
+    if not ntfy_topic:
+        print("[Alerts] No NTFY_TOPIC or NFTY_TOPIC secret configured — skipping push.")
         return
+
+    if not alert_deals:
+        print("[Alerts] No deals met alert threshold today.")
+        return
+
     summary_lines = [
-        f"• [Grade {d['grade']}/5{' 🦄 DFW/DAL UNICORN' if d.get('is_unicorn_dfw_dal') else ''}] {d['origin']}→{d['destination']} ({d['cabin']}): {d['miles']:,} pts + ${d['taxes']} ({d['cpp']}¢ CPP) via {d['program']} — {d['url']}"
+        f"• [Grade {d['grade']}/5{' 🦄 DFW/DAL UNICORN' if d.get('is_unicorn_dfw_dal') else ''}] {d['origin']}→{d['destination']} ({d['cabin']}): {d['miles']:,} pts + ${d['taxes']} ({d['cpp']}¢ CPP) • {d['flight_times']} — {d['google_flights_url']}"
         for d in alert_deals[:5]
     ]
     body = "\n".join(summary_lines)
-    title = f"AwardRadar: {len(unicorns)} DFW/DAL Unicorn(s) & {len(alert_deals)} Graded Alerts" if unicorns else f"AwardRadar: {len(alert_deals)} Graded Flight Alerts"
+    title = (
+        f"AwardRadar: {len(unicorns)} DFW/DAL Unicorn(s) & {len(alert_deals)} Alerts"
+        if unicorns else
+        f"AwardRadar: {len(alert_deals)} Flight Alert(s) ({total_count} Live)"
+    )
 
-    ntfy_topic = os.environ.get("NTFY_TOPIC", "").strip()
-    if ntfy_topic:
-        try:
-            requests.post(
-                f"https://ntfy.sh/{ntfy_topic}",
-                data=body.encode("utf-8"),
-                headers={"Title": title, "Priority": "urgent" if unicorns else "high", "Tags": "airplane,star"},
-                timeout=10,
-            )
-            print("[Alerts] Sent ntfy.sh push notification.")
-        except Exception as e:
-            print(f"[Alerts] ntfy.sh failed: {e}")
-
-    discord_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
-    if discord_url:
-        try:
-            requests.post(discord_url, json={"content": f"**{title}**\n{body}"}, timeout=10)
-            print("[Alerts] Sent Discord webhook notification.")
-        except Exception as e:
-            print(f"[Alerts] Discord failed: {e}")
-
-    smtp_user = os.environ.get("SMTP_USER", "").strip()
-    smtp_pass = os.environ.get("SMTP_PASS", "").strip()
-    alert_email = os.environ.get("ALERT_EMAIL", "").strip()
-    if smtp_user and smtp_pass and alert_email:
-        try:
-            msg = MIMEText(body)
-            msg["Subject"] = title
-            msg["From"] = smtp_user
-            msg["To"] = alert_email
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
-                server.login(smtp_user, smtp_pass)
-                server.sendmail(smtp_user, [alert_email], msg.as_string())
-            print("[Alerts] Sent Gmail SMTP email alert.")
-        except Exception as e:
-            print(f"[Alerts] SMTP failed: {e}")
+    try:
+        resp = requests.post(
+            f"https://ntfy.sh/{ntfy_topic}",
+            data=body.encode("utf-8"),
+            headers={"Title": title, "Priority": "urgent" if unicorns else "high", "Tags": "airplane,star"},
+            timeout=15,
+        )
+        print(f"[Alerts] Sent ntfy.sh push to '{ntfy_topic}' (HTTP {resp.status_code}).")
+    except Exception as e:
+        print(f"[Alerts] ntfy.sh failed: {e}")
 
 
 def main():
-    print("=== AwardRadar Zero-Cost Waterfall Engine Starting ===")
+    print("=== AwardRadar Zero-Cost Engine Starting ===")
     cfg = load_config()
     searches = cfg.get("searches", [])
     alert_cfg = cfg.get("alert_config", {}) or {}
     min_grade = int(alert_cfg.get("min_grade", 4))
     alert_dfw_dal_unicorns = bool(alert_cfg.get("alert_dfw_dal_unicorns", True))
-    print(f"Loaded {len(searches)} itineraries (cap={cfg.get('max_itineraries', 4)}), min_grade={min_grade}, dfw_dal_unicorns={alert_dfw_dal_unicorns}")
 
     raw_deals = []
+    # Layer 0: Always actively search user's configured itineraries first!
+    raw_deals.extend(layer0_direct_itineraries(searches))
     raw_deals.extend(layer1_pointsyeah_and_promos())
     raw_deals.extend(layer2_rss_feeds())
     raw_deals.extend(layer3_reddit_awardtravel())
@@ -649,32 +784,21 @@ def main():
 
     deduped = {}
     for d in raw_deals:
-        key = f"{d['origin']}-{d['destination']}-{d['cabin']}-{d['title'][:38].lower()}"
-        if key not in deduped:
+        key = f"{d['origin']}-{d['destination']}-{d['cabin']}-{d['airline'][:18].lower()}-{d['travel_date']}"
+        if key not in deduped or d.get("matched_search"):
             deduped[key] = d
 
     enriched = []
-    fast_flights_calls = 0
     for d in deduped.values():
         matched, itin_name = match_itinerary(d, searches)
         d["matched_search"] = matched
         if itin_name:
             d["itinerary_name"] = itin_name
 
-        if fast_flights_calls < 8 and len(d["origin"]) == 3 and len(d["destination"]) == 3:
-            cash, is_verified, price_level, flight_desc = verify_cash_price(d["origin"], d["destination"], d["cabin"])
-            fast_flights_calls += 1
-        else:
-            cash, is_verified, price_level, flight_desc = HEURISTIC_CASH.get(d["cabin"], 3200), False, "typical", None
-
+        cash = d.get("cash_benchmark") or HEURISTIC_CASH.get(d["cabin"], 3200)
         d["cash_benchmark"] = cash
-        d["verified"] = is_verified
-        d["price_level"] = price_level
-        if flight_desc:
-            d["flights_taken"] = flight_desc[0]
-            d["flight_times"] = flight_desc[1]
         d["cpp"] = round(max(0.5, ((cash - d["taxes"]) / max(d["miles"], 1000)) * 100), 2)
-        grade, grade_label = compute_deal_grade(d["cpp"], d["cabin"], d["miles"], price_level)
+        grade, grade_label = compute_deal_grade(d["cpp"], d["cabin"], d["miles"], d.get("price_level", "typical"))
         d["grade"] = grade
         d["grade_label"] = grade_label
         d["is_unicorn_dfw_dal"] = (grade == 5 and d["origin"] in ("DFW", "DAL") and not matched)
@@ -682,12 +806,14 @@ def main():
             d["itinerary_name"] = f"DFW/DAL Unicorn ({d['origin']} → {d['destination']})"
         enriched.append(d)
 
-    # Sort by Grade (5 -> 1), then Business/First priority, then CPP descending
-    enriched.sort(
-        key=lambda d: (d["grade"], CABIN_PRIORITY.get(d["cabin"], 1), d["cpp"]),
-        reverse=True,
-    )
-    final_deals = enriched[:30]
+    # Always keep ALL matched itinerary flights + top graded discovery/unicorn deals
+    matched_list = [d for d in enriched if d["matched_search"]]
+    other_list = [d for d in enriched if not d["matched_search"]]
+    matched_list.sort(key=lambda d: (d["grade"], CABIN_PRIORITY.get(d["cabin"], 1), d["cpp"]), reverse=True)
+    other_list.sort(key=lambda d: (d["is_unicorn_dfw_dal"], d["grade"], CABIN_PRIORITY.get(d["cabin"], 1), d["cpp"]), reverse=True)
+
+    final_deals = (matched_list[:20] + other_list[:15])
+    final_deals.sort(key=lambda d: (d["grade"], CABIN_PRIORITY.get(d["cabin"], 1), d["cpp"]), reverse=True)
 
     os.makedirs(os.path.dirname(DEALS_FILE), exist_ok=True)
     with open(DEALS_FILE, "w", encoding="utf-8") as f:
@@ -706,8 +832,8 @@ def main():
         elif d["matched_search"] and d["grade"] >= min_grade:
             alert_deals.append(d)
 
-    print(f"=== Saved {len(final_deals)} flights ({len(alert_deals)} alert-worthy, {len(unicorns)} DFW/DAL unicorns) ===")
-    send_notifications(alert_deals, unicorns)
+    print(f"=== Saved {len(final_deals)} flights ({len(matched_list)} itinerary matches, {len(unicorns)} DFW/DAL unicorns) ===")
+    send_ntfy_notification(alert_deals, unicorns, len(final_deals))
 
 
 if __name__ == "__main__":
