@@ -783,16 +783,18 @@ def send_ntfy_notification(alert_deals, unicorns, total_count, matched_count):
         body = f"Scanned your itineraries ({matched_count} matches, {total_count} total live flights). No Grade 4-5 deals or DFW/DAL Unicorns crossed your alert threshold on this run."
         priority = "default"
     else:
-        summary_lines = [
-            f"- [Grade {d['grade']}/5{' UNICORN' if d.get('is_unicorn_dfw_dal') else ''}] {d['origin']}->{d['destination']} ({d['cabin']}): {d['miles']:,} pts + ${d['taxes']} ({d['cpp']}c CPP) | {d['flight_times']} | {d['google_flights_url']}"
-            for d in alert_deals[:5]
-        ]
-        body = "\n".join(summary_lines)
-        title = (
-            f"AwardRadar: {len(unicorns)} DFW/DAL Unicorn(s) & {len(alert_deals)} Alerts"
-            if unicorns else
-            f"AwardRadar: {len(alert_deals)} Flight Alert(s) ({total_count} Live)"
-        )
+        entries = []
+        for d in alert_deals[:5]:
+            stars = "★" * int(d["grade"]) + "☆" * (5 - int(d["grade"]))
+            deal_url = d.get("google_flights_url") or d.get("url") or "https://www.google.com/travel/flights"
+            date_str = d.get("travel_date") or d.get("dates") or "Flexible"
+            airline_str = d.get("airline") or d.get("program") or "Airline"
+            entries.append(
+                f"{stars} | {d['miles']:,} pts | {d['origin']} -> {d['destination']}\n"
+                f"{date_str} | {airline_str} | [View Deal]({deal_url})"
+            )
+        body = "\n\n".join(entries)
+        title = f"AwardRadar: {len(alert_deals)} Flight{'s' if len(alert_deals) != 1 else ''} Identified"
         priority = "urgent" if unicorns else "high"
 
     safe_title = title.encode("ascii", "ignore").decode("ascii")
@@ -800,7 +802,7 @@ def send_ntfy_notification(alert_deals, unicorns, total_count, matched_count):
         resp = requests.post(
             f"https://ntfy.sh/{ntfy_topic}",
             data=body.encode("utf-8"),
-            headers={"Title": safe_title, "Priority": priority, "Tags": "airplane,star"},
+            headers={"Title": safe_title, "Priority": priority, "Tags": "airplane,star", "Markdown": "yes"},
             timeout=15,
         )
         print(f"[Alerts] Sent ntfy.sh push to '{ntfy_topic}' (HTTP {resp.status_code}, manual={is_manual_run}).")
