@@ -16,7 +16,7 @@
     "Virgin Atlantic"
   ],
   "alert_config": {
-    "min_grade": 3,
+    "min_grade": 4,
     "alert_dfw_dal_unicorns": true
   },
   "searches": [
@@ -63,7 +63,7 @@
       "destination": "LGB,LAX",
       "start_date": "2026-12-24",
       "end_date": "2026-12-31",
-      "cabin": "Economy",
+      "cabin": "Any",
       "max_points": 25000,
       "min_cpp": 1.5,
       "dates": "2026-12-24 to 2026-12-31",
