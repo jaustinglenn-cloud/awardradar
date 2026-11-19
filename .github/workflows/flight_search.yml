@@ -32,6 +32,7 @@ jobs:
           SEATS_AERO_API_KEY: ${{ secrets.SEATS_AERO_API_KEY }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NFTY_TOPIC: ${{ secrets.NFTY_TOPIC }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           python scripts/search_flights.py
 
