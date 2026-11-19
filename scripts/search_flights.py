@@ -110,6 +110,7 @@ AWARD_KEYWORDS = [
 ]
 
 RSS_FEEDS = [
+    ("CheapDFW", "https://cheapdfw.com/feed/"),
     ("Frequent Miler", "https://frequentmiler.com/feed/"),
     ("One Mile at a Time", "https://onemileatatime.com/feed/"),
     ("View from the Wing", "https://viewfromthewing.com/feed/"),
@@ -126,6 +127,114 @@ RSS_FEEDS = [
 ]
 
 HEURISTIC_CASH = {"First": 8500, "Business": 3600, "Premium Economy": 1650, "Economy": 680}
+
+BASELINE_TRANSFER_BONUSES = {
+    "Virgin Atlantic": {"pct": 40, "expires": "2026-12-30", "source": "https://frequentmiler.com/current-point-transfer-bonuses/"},
+    "British Airways Avios": {"pct": 30, "expires": "2026-12-01", "source": "https://frequentmiler.com/current-point-transfer-bonuses/"},
+    "Iberia Plus": {"pct": 30, "expires": "2026-12-01", "source": "https://frequentmiler.com/current-point-transfer-bonuses/"},
+    "Air France/KLM Flying Blue": {"pct": 0, "expires": None, "source": "https://frequentmiler.com/current-point-transfer-bonuses/"},
+    "Air Canada Aeroplan": {"pct": 0, "expires": None, "source": "https://frequentmiler.com/current-point-transfer-bonuses/"},
+}
+
+
+def fetch_live_transfer_bonuses():
+    """Scrapes Frequent Miler daily for active Chase UR transfer bonuses and their expiration dates."""
+    bonuses = {k: dict(v) for k, v in BASELINE_TRANSFER_BONUSES.items()}
+    url = "https://frequentmiler.com/current-point-transfer-bonuses/"
+    try:
+        resp = requests.get(url, headers=BROWSER_HEADERS, timeout=15)
+        if resp.status_code != 200:
+            return bonuses
+        text = re.sub(r"<[^>]+>", " ", resp.text)
+        text = re.sub(r"\s+", " ", text)
+        patterns = {
+            "Virgin Atlantic": r"Chase[^.]{0,160}?Virgin Atlantic[^.]{0,100}?(\d{2})%([^.]{0,90})",
+            "British Airways Avios": r"Chase[^.]{0,160}?British Airways[^.]{0,100}?(\d{2})%([^.]{0,90})",
+            "Iberia Plus": r"Chase[^.]{0,160}?Iberia[^.]{0,100}?(\d{2})%([^.]{0,90})",
+            "Air France/KLM Flying Blue": r"Chase[^.]{0,160}?Flying Blue[^.]{0,100}?(\d{2})%([^.]{0,90})",
+            "Air Canada Aeroplan": r"Chase[^.]{0,160}?Aeroplan[^.]{0,100}?(\d{2})%([^.]{0,90})",
+        }
+        for prog, pat in patterns.items():
+            m = re.search(pat, text, re.I)
+            if m:
+                bonuses[prog]["pct"] = int(m.group(1))
+                tail = m.group(2) or ""
+                m_exp = re.search(r"(?:through|until|ends?|exp\w*)\s+([A-Z][a-z]+\s+\d{1,2}(?:,?\s+20\d{2})?|\d{1,2}/\d{1,2}/20\d{2})", tail, re.I)
+                if m_exp:
+                    bonuses[prog]["expires"] = m_exp.group(1).strip()
+            else:
+                bonuses[prog]["pct"] = 0
+                bonuses[prog]["expires"] = None
+        print("[Bonuses] Refreshed daily transfer bonuses:", {k: f"{v['pct']}% (exp {v['expires']})" for k, v in bonuses.items() if v["pct"] > 0})
+    except Exception as e:
+        print(f"[Bonuses] Refresh skipped ({e}); using baseline.")
+    return bonuses
+
+
+def extract_deal_with_gemini(title, excerpt, source_name, url, api_key):
+    """Uses Gemini 2.5 Flash free tier (when GEMINI_API_KEY is set) to accurately extract structured flight deals."""
+    if not api_key:
+        return None
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    prompt = (
+        'Extract the single best REAL flight deal from this article excerpt as strict JSON. '
+        'NEVER invent or guess an origin airport, cabin, or price that is not explicitly in the text. '
+        'If it is not a concrete flight deal with both an origin and destination airport, return {"is_deal": false}. '
+        'If multiple origins are listed and DFW or DAL is explicitly among them, pick DFW or DAL. '
+        'Return JSON schema: {"is_deal": bool, "origin": "3-letter IATA", "destination": "3-letter IATA", '
+        '"airline": "string", "program": "string", "cabin": "First|Business|Premium Economy|Economy", '
+        '"miles": int_or_null, "taxes_usd": number_or_null, "cash_usd": number_or_null, "dates": "string"}.\n\n'
+        f"TITLE: {title}\nEXCERPT: {excerpt[:2200]}"
+    )
+    try:
+        resp = requests.post(
+            endpoint,
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.0},
+            },
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return None
+        cand_txt = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        obj = json.loads(cand_txt)
+        if not obj.get("is_deal"):
+            return None
+        o = str(obj.get("origin") or "").upper().strip()
+        d = str(obj.get("destination") or "").upper().strip()
+        if len(o) != 3 or len(d) != 3 or o == d:
+            return None
+        cab = obj.get("cabin") or "Economy"
+        if cab not in ("First", "Business", "Premium Economy", "Economy"):
+            cab = "Economy"
+        miles = obj.get("miles")
+        cash = obj.get("cash_usd")
+        taxes = obj.get("taxes_usd")
+        price_level = "typical"
+        if not miles and cash and cash >= 60:
+            miles = max(5000, math.ceil(float(cash) / 0.0125))
+            price_level = "low"
+            taxes = 0 if taxes is None else taxes
+        if not miles:
+            return None
+        return make_deal(
+            title=title,
+            source=f"{source_name} (AI)",
+            url=url,
+            origin=o,
+            dest=d,
+            cabin=cab,
+            miles=int(miles),
+            taxes=float(taxes) if taxes is not None else (150 if d in LONG_HAUL_AIRPORTS else 6),
+            dates=str(obj.get("dates") or "Select Dates"),
+            program=obj.get("program") or None,
+            airline=obj.get("airline") or None,
+            cash_benchmark=float(cash) if cash else None,
+            price_level=price_level,
+        )
+    except Exception:
+        return None
 CABIN_PRIORITY = {"First": 4, "Business": 3, "Premium Economy": 2, "Economy": 1}
 
 
@@ -263,24 +372,107 @@ def map_carrier_award_estimate(airline_name, origin, dest, cabin, cash_price):
     return "Chase Travel Portal", portal_pts, 6
 
 
+def fetch_article_excerpt(url, max_chars=3500):
+    """Fetches the first ~12 paragraphs/list items of an article to extract real routes, miles & cabin."""
+    if not url or not url.startswith("http"):
+        return ""
+    try:
+        resp = requests.get(url, headers=BROWSER_HEADERS, timeout=10)
+        if resp.status_code != 200:
+            return ""
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            tag.decompose()
+        root = soup.find("article") or soup.find("main") or soup
+        chunks = []
+        total = 0
+        for el in root.find_all(["p", "li"], limit=28):
+            txt = " ".join(el.get_text(" ", strip=True).split())
+            if len(txt) < 18:
+                continue
+            chunks.append(txt)
+            total += len(txt)
+            if total >= max_chars or len(chunks) >= 14:
+                break
+        return " \n ".join(chunks)
+    except Exception:
+        return ""
+
+
+def extract_paired_miles_and_cabin(text, is_long_haul=False):
+    """
+    Scans sentence-by-sentence to pair mileage cost with the cabin mentioned in the SAME sentence,
+    preventing an Economy price in paragraph 3 from being paired with a Business mention in paragraph 1.
+    """
+    sentences = re.split(r"[\n\.!?]+", text)
+    best = None
+    for sent in sentences:
+        pts = extract_miles(sent)
+        if not pts:
+            continue
+        cab = extract_cabin(sent, miles=pts, is_long_haul=is_long_haul)
+        if cab:
+            # Prefer Business/First if explicitly paired with valid miles in the same sentence
+            prio = CABIN_PRIORITY.get(cab, 1)
+            if best is None or prio > best[2]:
+                best = (pts, cab, prio, sent)
+    if best:
+        return best[0], best[1], best[3]
+    # Fallback across full text with strict long-haul sanity guard
+    pts = extract_miles(text)
+    if not pts:
+        return None, None, text
+    cab = extract_cabin(text, miles=pts, is_long_haul=is_long_haul)
+    return pts, cab, text
+
+
+def extract_cash_fare_deal(text):
+    """Detects cash mistake fares / low fares (e.g. from The Flight Deal, Secret Flying, Fly4free)."""
+    low = text.lower()
+    if not any(k in low for k in ("roundtrip", "round-trip", "one-way", "nonstop", "fare", "flights from", "deal")):
+        return None
+    m = re.search(r"\$\s*(\d{3,4})\b", text)
+    if not m:
+        return None
+    val = int(m.group(1))
+    if 99 <= val <= 2800:
+        return val
+    return None
+
+
 def extract_route(text):
-    """Strictly requires BOTH an explicit origin and destination in the text. Never fabricates DFW."""
-    m = re.search(r"\b([A-Z]{3})\s*(?:->|→|–|-|to|/)\s*([A-Z]{3})\b", text)
-    if m:
-        o, d = m.group(1), m.group(2)
-        if o in AIRPORT_NAMES and d in AIRPORT_NAMES and o != d:
+    """
+    Strictly requires BOTH an explicit origin and destination in the text. Never fabricates DFW.
+    If multiple US origins are listed (e.g. "DFW, ORD, JFK to MXP"), prefers DFW/DAL when truly present.
+    """
+    # 1. Explicit IATA pair: DFW-MXP, DFW -> MXP, ORD to HND
+    pairs = re.findall(r"\b([A-Z]{3})\s*(?:->|→|–|-|to|/)\s*([A-Z]{3})\b", text)
+    valid_pairs = [(o, d) for o, d in pairs if o in AIRPORT_NAMES and d in AIRPORT_NAMES and o != d]
+    for o, d in valid_pairs:
+        if o in ("DFW", "DAL"):
             return o, d
+    if valid_pairs:
+        return valid_pairs[0]
+
+    # 2. Multi-hub text scan with word boundaries
     low = text.lower()
     found = []
     for key, code in CITY_TO_IATA.items():
-        # Word-boundary match prevents false hits like 'ord' inside 'affordable' or 'dal' inside 'modal'
         m_city = re.search(r"\b" + re.escape(key) + r"\b", low)
         if m_city and code not in [c for _, c in found]:
             found.append((m_city.start(), code))
     found.sort(key=lambda x: x[0])
-    if len(found) >= 2:
-        return found[0][1], found[1][1]
-    return None, None
+    codes = [c for _, c in found]
+    if len(codes) < 2:
+        return None, None
+
+    us_codes = [c for c in codes if c in REGION_MAP["US"]]
+    intl_codes = [c for c in codes if c not in REGION_MAP["US"]]
+    if us_codes and intl_codes:
+        # Prefer DFW/DAL only if actually mentioned in the article!
+        orig = "DFW" if "DFW" in us_codes else ("DAL" if "DAL" in us_codes else us_codes[0])
+        return orig, intl_codes[0]
+    return codes[0], codes[1]
 
 
 def compute_deal_grade(cpp, cabin, miles, price_level="typical"):
@@ -361,17 +553,30 @@ def make_deal(title, source, url, origin=None, dest=None, cabin=None, miles=None
     o, d = (origin, dest) if (origin and dest) else extract_route(full_text)
     if not o or not d or o == d:
         return None
-    pts = miles if miles is not None else extract_miles(full_text)
-    if not pts:
-        return None
     is_lh = (o in LONG_HAUL_AIRPORTS) or (d in LONG_HAUL_AIRPORTS)
-    cab = cabin or extract_cabin(full_text, miles=pts, is_long_haul=is_lh)
-    if not cab:
+    matched_sent = full_text
+    if miles is not None:
+        pts = miles
+        cab = cabin or extract_cabin(full_text, miles=pts, is_long_haul=is_lh)
+    else:
+        pts, parsed_cab, matched_sent = extract_paired_miles_and_cabin(full_text, is_long_haul=is_lh)
+        cab = cabin or parsed_cab
+        # Cash mistake-fare / low-fare fallback (Secret Flying, The Flight Deal, Fly4free)
+        if not pts:
+            cash_deal = extract_cash_fare_deal(full_text)
+            if cash_deal:
+                cab = cab or ("Business" if ("business" in full_text.lower() and cash_deal >= 900) else "Economy")
+                pts = max(5000, math.ceil(cash_deal / 0.0125))
+                if cash_benchmark is None:
+                    cash_benchmark = cash_deal
+                price_level = "low"
+                if taxes is None:
+                    taxes = 0
+    if not pts or not cab:
         return None
-    # Final long-haul cabin sanity guard
     if is_lh and pts < 35000 and cab in ("Business", "First"):
         cab = "Economy"
-    tax_val = taxes if taxes is not None else extract_taxes(full_text, default_tax=150 if is_lh else 6)
+    tax_val = taxes if taxes is not None else extract_taxes(matched_sent, default_tax=extract_taxes(full_text, default_tax=150 if is_lh else 6))
     prog, air = (program, airline) if (program and airline) else extract_program_and_airline(full_text)
     currencies = PROGRAM_CURRENCIES.get(prog, ["Chase UR", "American AAdvantage", "Delta SkyMiles"])
     m_date = re.search(r"(\d{4}-\d{2}-\d{2})", str(travel_date or dates or ""))
@@ -636,25 +841,43 @@ def layer1_pointsyeah_and_promos():
 
 def layer2_rss_feeds():
     deals = []
+    article_fetches = 0
     for source_name, feed_url in RSS_FEEDS:
         try:
             resp = requests.get(feed_url, headers=BROWSER_HEADERS, timeout=15)
             if resp.status_code != 200:
                 continue
             parsed = feedparser.parse(resp.content)
-            count = 0
-            for entry in parsed.entries[:15]:
+            kept = 0
+            for entry in parsed.entries[:12]:
                 title = entry.get("title", "")
                 summary = BeautifulSoup(entry.get("summary", ""), "html.parser").get_text(" ", strip=True)
-                combined = f"{title} {summary[:300]}"
-                if any(k in combined.lower() for k in AWARD_KEYWORDS):
-                    link = entry.get("link", feed_url)
+                combined = f"{title} \n {summary[:500]}"
+                low_c = combined.lower()
+                is_cash_deal_feed = source_name in ("CheapDFW", "The Flight Deal", "Fly4free", "Secret Flying")
+                if not (is_cash_deal_feed or any(k in low_c for k in AWARD_KEYWORDS)):
+                    continue
+
+                link = entry.get("link", feed_url)
+                gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+                d_item = None
+                if gemini_key and article_fetches < 18 and link.startswith("http"):
+                    article_fetches += 1
+                    excerpt = fetch_article_excerpt(link) or combined
+                    d_item = extract_deal_with_gemini(title, excerpt, source_name, link, gemini_key)
+                if not d_item:
                     d_item = make_deal(title, f"{source_name} RSS", link, parse_text=combined)
-                    if d_item: deals.append(d_item)
-                    count += 1
-                    if count >= 4:
+                if not d_item and article_fetches < 24 and link.startswith("http"):
+                    article_fetches += 1
+                    excerpt = fetch_article_excerpt(link)
+                    if excerpt:
+                        d_item = make_deal(title, f"{source_name} RSS", link, parse_text=f"{title} \n {excerpt}")
+                if d_item:
+                    deals.append(d_item)
+                    kept += 1
+                    if kept >= 3:
                         break
-            print(f"[Layer 2] {source_name}: {count} matching posts")
+            print(f"[Layer 2] {source_name}: {kept} verified deals (article fetches so far: {article_fetches})")
         except Exception as e:
             print(f"[Layer 2] {source_name} error: {e}")
     return deals
@@ -695,7 +918,29 @@ def layer3_reddit_awardtravel():
                     d_item = make_deal(title, sub_name, permalink, miles=miles, parse_text=combined)
                     if d_item: deals.append(d_item)
         except Exception as e:
-            print(f"[Layer 3] Reddit error ({url}): {e}")
+            print(f"[Layer 3] Reddit JSON error ({url}): {e}")
+    # Fallback to Reddit RSS/Atom if JSON API was blocked by datacenter IP rate-limits
+    if not deals:
+        for sub_name, rss_url in [
+            ("r/awardtravel", "https://www.reddit.com/r/awardtravel/new/.rss"),
+            ("r/flights", "https://www.reddit.com/r/flights/new/.rss"),
+        ]:
+            try:
+                r = requests.get(rss_url, headers=REDDIT_HEADERS, timeout=12)
+                if r.status_code != 200:
+                    continue
+                feed = feedparser.parse(r.content)
+                for entry in feed.entries[:20]:
+                    title = entry.get("title", "")
+                    body = BeautifulSoup(entry.get("summary", ""), "html.parser").get_text(" ", strip=True)
+                    combined = f"{title} \n {body[:800]}"
+                    if title.strip().endswith("?") and "availability" not in combined.lower():
+                        continue
+                    d_item = make_deal(title, sub_name, entry.get("link", rss_url), parse_text=combined)
+                    if d_item:
+                        deals.append(d_item)
+            except Exception as e:
+                print(f"[Layer 3] Reddit RSS fallback error ({sub_name}): {e}")
     print(f"[Layer 3] Reddit extracted: {len(deals)} deals")
     return deals
 
@@ -829,6 +1074,7 @@ def main():
     min_grade = int(alert_cfg.get("min_grade", 4))
     alert_dfw_dal_unicorns = bool(alert_cfg.get("alert_dfw_dal_unicorns", True))
 
+    live_bonuses = fetch_live_transfer_bonuses()
     raw_deals = []
     # Layer 0: Always actively search user's configured itineraries first!
     raw_deals.extend(layer0_direct_itineraries(searches))
@@ -851,6 +1097,15 @@ def main():
         d["matched_search"] = matched
         if itin_name:
             d["itinerary_name"] = itin_name
+
+        # Apply active daily Chase UR transfer bonus if applicable
+        b_info = live_bonuses.get(d.get("program") or "")
+        b_pct = int(b_info.get("pct", 0)) if (b_info and "Chase UR" in (d.get("transfer_currencies") or [])) else 0
+        d["base_miles"] = d["miles"]
+        d["transfer_bonus_pct"] = b_pct
+        d["transfer_bonus_expires"] = b_info.get("expires") if b_pct > 0 else None
+        if b_pct > 0:
+            d["miles"] = math.ceil(d["base_miles"] / (1.0 + b_pct / 100.0))
 
         cash = d.get("cash_benchmark") or HEURISTIC_CASH.get(d["cabin"], 3200)
         d["cash_benchmark"] = cash
@@ -887,8 +1142,10 @@ def main():
     with open(DEALS_FILE, "w", encoding="utf-8") as f:
         json.dump({
             "updated_at": datetime.now(timezone.utc).isoformat(),
-            "app_version": "v2.4",
+            "app_version": "v2.6",
             "ntfy_status": ntfy_status,
+            "ai_parser_active": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
+            "transfer_bonuses": live_bonuses,
             "total_count": len(final_deals),
             "deals": final_deals,
         }, f, indent=2)
