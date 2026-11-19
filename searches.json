@@ -1,47 +1,78 @@
-[
-  {
-    "id": "cfg-1",
-    "origin": "DFW",
-    "destination": "ZRH,MXP",
-    "cabin": "Business",
-    "max_points": 75000,
-    "min_cpp": 2.5,
-    "dates": "2027-09 / Flexible",
-    "currencies": [
-      "Chase UR",
-      "Amex MR"
-    ],
-    "active": true
+{
+  "schema_version": "2.0",
+  "max_itineraries": 4,
+  "global_partners": [
+    "Chase UR",
+    "American AAdvantage",
+    "Delta SkyMiles"
+  ],
+  "global_airlines": [
+    "American Airlines",
+    "Delta Air Lines",
+    "Iberia",
+    "British Airways",
+    "Air France",
+    "KLM",
+    "Virgin Atlantic"
+  ],
+  "alert_config": {
+    "min_grade": 4,
+    "alert_dfw_dal_unicorns": true
   },
-  {
-    "id": "cfg-2",
-    "origin": "DFW",
-    "destination": "HND,NRT",
-    "cabin": "Business",
-    "max_points": 85000,
-    "min_cpp": 3,
-    "dates": "Next 90 Days",
-    "currencies": [
-      "Chase UR",
-      "Amex MR",
-      "Bilt"
-    ],
-    "active": true
-  },
-  {
-    "id": "cfg-3",
-    "origin": "JFK,ORD",
-    "destination": "LHR,CDG,AMS",
-    "cabin": "Business",
-    "max_points": 60000,
-    "min_cpp": 2.5,
-    "dates": "Flexible",
-    "currencies": [
-      "Chase UR",
-      "Amex MR",
-      "Capital One",
-      "Citi TYP"
-    ],
-    "active": true
-  }
-]
+  "searches": [
+    {
+      "id": "cfg-1",
+      "name": "Northern Italy Outbound",
+      "origin": "DFW",
+      "destination": "MXP,ZRH",
+      "start_date": "2027-09-10",
+      "end_date": "2027-09-12",
+      "cabin": "Any",
+      "max_points": 75000,
+      "min_cpp": 2,
+      "dates": "2027-09-10 to 2027-09-12",
+      "currencies": [
+        "Chase UR",
+        "American AAdvantage",
+        "Delta SkyMiles"
+      ],
+      "active": true
+    },
+    {
+      "id": "cfg-2",
+      "name": "Northern Italy Return",
+      "origin": "VCE",
+      "destination": "DFW",
+      "start_date": "2027-09-18",
+      "end_date": "2027-09-20",
+      "cabin": "Any",
+      "max_points": 75000,
+      "min_cpp": 2,
+      "dates": "2027-09-18 to 2027-09-20",
+      "currencies": [
+        "Chase UR",
+        "American AAdvantage",
+        "Delta SkyMiles"
+      ],
+      "active": true
+    },
+    {
+      "id": "cfg-3",
+      "name": "LA Holiday Trip",
+      "origin": "DAL",
+      "destination": "LGB,LAX",
+      "start_date": "2026-12-24",
+      "end_date": "2026-12-31",
+      "cabin": "Economy",
+      "max_points": 25000,
+      "min_cpp": 1.5,
+      "dates": "2026-12-24 to 2026-12-31",
+      "currencies": [
+        "Chase UR",
+        "American AAdvantage",
+        "Delta SkyMiles"
+      ],
+      "active": true
+    }
+  ]
+}
