@@ -1,74 +1,47 @@
-{
-  "schema_version": "1.4",
-  "max_slots_guardrail": 5,
-  "home_default": "DFW",
-  "home_alternate": "DAL",
-  "updated_at": "2026-11-19T11:06:11.837Z",
-  "transfer_bonuses": {
-    "Virgin Atlantic": 40,
-    "British Airways Avios": 30,
-    "Iberia Plus": 30,
-    "Flying Blue": 0,
-    "Air Canada Aeroplan": 0
+[
+  {
+    "id": "cfg-1",
+    "origin": "DFW",
+    "destination": "ZRH,MXP",
+    "cabin": "Business",
+    "max_points": 75000,
+    "min_cpp": 2.5,
+    "dates": "2027-09 / Flexible",
+    "currencies": [
+      "Chase UR",
+      "Amex MR"
+    ],
+    "active": true
   },
-  "alert_rules": {
-    "min_stars": 4,
-    "min_cpp": 0,
-    "max_points_per_person": 65000,
-    "cabin": "all",
-    "ecosystem": "all",
-    "alert_on_low_cash": true
+  {
+    "id": "cfg-2",
+    "origin": "DFW",
+    "destination": "HND,NRT",
+    "cabin": "Business",
+    "max_points": 85000,
+    "min_cpp": 3,
+    "dates": "Next 90 Days",
+    "currencies": [
+      "Chase UR",
+      "Amex MR",
+      "Bilt"
+    ],
+    "active": true
   },
-  "searches": [
-    {
-      "id": 1,
-      "origin": "DFW",
-      "destination": "MXP",
-      "date": "2027-09-10",
-      "flex": true,
-      "cabin": "Both",
-      "seats": 2,
-      "notes": "Northern Italy Lake Como & Dolomites Outbound"
-    },
-    {
-      "id": 2,
-      "origin": "VCE",
-      "destination": "DFW",
-      "date": "2027-09-18",
-      "flex": true,
-      "cabin": "Both",
-      "seats": 2,
-      "notes": "Northern Italy Venice Open-Jaw Return"
-    },
-    {
-      "id": 3,
-      "origin": "DFW",
-      "destination": "BLQ",
-      "date": "2027-09-11",
-      "flex": true,
-      "cabin": "Business",
-      "seats": 2,
-      "notes": "Modena & Bologna Food Hub Alternate"
-    },
-    {
-      "id": 4,
-      "origin": "DAL",
-      "destination": "LGB",
-      "date": "2026-12-24",
-      "flex": false,
-      "cabin": "Economy",
-      "seats": 2,
-      "notes": "LA Christmas Holiday Outbound (Love Field → Long Beach)"
-    },
-    {
-      "id": 5,
-      "origin": "LAX",
-      "destination": "DFW",
-      "date": "2026-12-31",
-      "flex": true,
-      "cabin": "Both",
-      "seats": 2,
-      "notes": "LA New Year's Eve Return"
-    }
-  ]
-}
+  {
+    "id": "cfg-3",
+    "origin": "JFK,ORD",
+    "destination": "LHR,CDG,AMS",
+    "cabin": "Business",
+    "max_points": 60000,
+    "min_cpp": 2.5,
+    "dates": "Flexible",
+    "currencies": [
+      "Chase UR",
+      "Amex MR",
+      "Capital One",
+      "Citi TYP"
+    ],
+    "active": true
+  }
+]
