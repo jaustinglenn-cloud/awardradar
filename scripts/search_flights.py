@@ -113,6 +113,14 @@ RSS_FEEDS = [
     ("View from the Wing", "https://viewfromthewing.com/feed/"),
     ("Thrifty Traveler", "https://thriftytraveler.com/feed/"),
     ("Doctor of Credit", "https://www.doctorofcredit.com/feed/"),
+    ("Upgraded Points", "https://upgradedpoints.com/feed/"),
+    ("AwardWallet Blog", "https://awardwallet.com/blog/feed/"),
+    ("The Points Guy", "https://thepointsguy.com/feed/"),
+    ("Miles to Memories", "https://milestomemories.com/feed/"),
+    ("God Save The Points", "https://www.godsavethepoints.com/feed/"),
+    ("The Flight Deal", "https://feeds.feedburner.com/TheFlightDeal"),
+    ("Fly4free", "https://www.fly4free.com/feed/"),
+    ("Secret Flying", "https://www.secretflying.com/feed/"),
 ]
 
 HEURISTIC_CASH = {
@@ -241,7 +249,7 @@ def compute_deal_grade(cpp, cabin, miles, price_level="typical"):
     is_premium = cabin in ("Business", "First")
     is_low = (price_level == "low")
     if is_premium:
-        if cpp >= 6.5 or (cabin == "First" and miles <= 85000 and cpp >= 6.0) or (miles <= 50000 and cpp >= 5.0):
+        if (cabin == "First" and cpp >= 10.0) or (cabin == "Business" and (cpp >= 9.0 or (miles <= 40000 and cpp >= 7.5))):
             return 5, "Unicorn (<1x/yr)"
         if cpp > 4.0:
             return 4, "Tremendous Value (>4 CPP)"
@@ -251,7 +259,7 @@ def compute_deal_grade(cpp, cabin, miles, price_level="typical"):
             return 2, "Google Flights Low"
         return 1, "Average Year-Round"
     else:
-        if cpp >= 3.0 or (miles <= 15000 and cpp >= 2.5):
+        if cpp >= 4.0 or (miles <= 10000 and cpp >= 3.5):
             return 5, "Unicorn (<1x/yr)"
         if cpp >= 2.0:
             return 4, "Tremendous Value"
@@ -262,14 +270,48 @@ def compute_deal_grade(cpp, cabin, miles, price_level="typical"):
         return 1, "Average Year-Round"
 
 
-def build_links(origin, dest, source_url):
+def build_airline_url(airline, origin, dest, travel_date):
+    low = (airline or "").lower()
     o = origin if len(origin) == 3 else "DFW"
-    d = dest if len(dest) == 3 else "CDG"
+    d = dest if len(dest) == 3 else "MXP"
+    dt_str = travel_date or (datetime.now(timezone.utc) + timedelta(days=45)).strftime("%Y-%m-%d")
+    if "american" in low or "jal" in low or "japan" in low:
+        return (
+            f"https://www.aa.com/booking/search?locale=en_US&pax=1&adult=1&type=OneWay&searchType=Award"
+            f"&slices=%5B%7B%22orig%22:%22{o}%22,%22dest%22:%22{d}%22,%22date%22:%22{dt_str}%22%7D%5D"
+        )
+    if "iberia" in low:
+        return f"https://www.iberia.com/us/flights/{o.lower()}-{d.lower()}/"
+    if "british" in low:
+        return "https://www.britishairways.com/travel/redeem/execclub/_gf/en_us"
+    if "air france" in low:
+        return "https://wwws.airfrance.us/search/open-dates"
+    if "klm" in low:
+        return "https://www.klm.us/search/open-dates"
+    if "delta" in low:
+        return f"https://www.delta.com/flight-search/book-a-flight?origin={o}&destination={d}"
+    if "virgin" in low or "ana" in low:
+        return "https://flywith.virginatlantic.com/us/en/reward-flight-finder.html"
+    if "southwest" in low:
+        return f"https://www.southwest.com/air/booking/select.html?originationAirportCode={o}&destinationAirportCode={d}&departureDate={dt_str}&fareType=POINTS"
+    if "united" in low:
+        return f"https://www.united.com/en/us/fsr/choose-flights?f={o}&t={d}&d={dt_str}&tt=1&at=1&px=1&taxng=1&newHP=True&clm=7&st=bestmatches"
+    return f"https://www.google.com/travel/flights?q={quote_plus(f'Flights to {d} from {o} on {dt_str} oneway {airline}')}"
+
+
+def build_links(origin, dest, source_url, cabin="Business", airline="", travel_date=""):
+    o = origin if len(origin) == 3 else "DFW"
+    d = dest if len(dest) == 3 else "MXP"
+    dt_str = travel_date or (datetime.now(timezone.utc) + timedelta(days=45)).strftime("%Y-%m-%d")
+    cab_q = "first class" if cabin == "First" else ("business class" if cabin == "Business" else ("premium economy" if cabin == "Premium Economy" else "economy"))
+    air_q = f" {airline.split('/')[0].strip()}" if airline and "Carrier" not in airline else ""
+    gf_query = f"Flights to {d} from {o} on {dt_str} oneway {cab_q}{air_q}"
     return {
-        "book_url": source_url,
+        "book_url": build_airline_url(airline, o, d, dt_str),
+        "airline_url": build_airline_url(airline, o, d, dt_str),
         "pointsyeah_url": "https://www.pointsyeah.com/",
         "seatsaero_url": f"https://seats.aero/search?origins={o}&destinations={d}",
-        "google_flights_url": f"https://www.google.com/travel/flights?q={quote_plus(f'Flights to {d} from {o}')}",
+        "google_flights_url": f"https://www.google.com/travel/flights?q={quote_plus(gf_query)}",
     }
 
 
@@ -280,7 +322,9 @@ def make_deal(title, source, url, origin=None, dest=None, cabin=None, miles=None
     pts = miles or extract_miles(title) or (55000 if cab == "Business" else 75000 if cab == "First" else 18000)
     prog, air = (program, airline) if (program and airline) else extract_program_and_airline(title)
     currencies = PROGRAM_CURRENCIES.get(prog, ["Chase UR", "American AAdvantage", "Delta SkyMiles"])
-    links = build_links(o, d, url)
+    m_date = re.search(r"(\d{4}-\d{2}-\d{2})", str(dates or ""))
+    t_date = m_date.group(1) if m_date else (datetime.now(timezone.utc) + timedelta(days=45)).strftime("%Y-%m-%d")
+    links = build_links(o, d, url, cabin=cab, airline=air, travel_date=t_date)
     uid = hashlib.md5(f"{o}-{d}-{cab}-{pts}-{title[:45]}".encode("utf-8")).hexdigest()[:12]
 
     return {
@@ -350,6 +394,26 @@ def layer1_pointsyeah_and_promos():
             ))
     except Exception as e:
         print(f"[Layer 1B] Flying Blue skipped: {e}")
+
+    # 1C: MilesFeed Live Points & Miles Aggregator
+    try:
+        resp = requests.get("https://milesfeed.com/", headers=BROWSER_HEADERS, timeout=15)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            seen_mf = set()
+            for a in soup.find_all("a", href=True):
+                txt = " ".join(a.get_text(" ", strip=True).split())
+                href = a["href"]
+                if len(txt) < 25 or txt in seen_mf or not href.startswith("http"):
+                    continue
+                if any(k in txt.lower() for k in AWARD_KEYWORDS):
+                    seen_mf.add(txt)
+                    deals.append(make_deal(txt, "MilesFeed Aggregator", href))
+                    if len(seen_mf) >= 6:
+                        break
+        print(f"[Layer 1C] MilesFeed scraped: {len(seen_mf)} deals")
+    except Exception as e:
+        print(f"[Layer 1C] MilesFeed skipped: {e}")
     return deals
 
 
@@ -381,11 +445,12 @@ def layer2_rss_feeds():
 def layer3_reddit_awardtravel():
     deals = []
     endpoints = [
-        "https://www.reddit.com/r/awardtravel/new.json?limit=30",
-        "https://www.reddit.com/r/awardtravel/hot.json?limit=20",
+        ("r/awardtravel", "https://www.reddit.com/r/awardtravel/new.json?limit=30"),
+        ("r/awardtravel", "https://www.reddit.com/r/awardtravel/hot.json?limit=20"),
+        ("r/flights", "https://www.reddit.com/r/flights/new.json?limit=20"),
     ]
     seen_ids = set()
-    for url in endpoints:
+    for sub_name, url in endpoints:
         try:
             resp = requests.get(url, headers=REDDIT_HEADERS, timeout=15)
             if resp.status_code != 200:
@@ -409,7 +474,7 @@ def layer3_reddit_awardtravel():
                 if miles or has_deal_signal:
                     seen_ids.add(pid)
                     permalink = f"https://www.reddit.com{post.get('permalink', '')}"
-                    deals.append(make_deal(title, "r/awardtravel", permalink, miles=miles))
+                    deals.append(make_deal(title, sub_name, permalink, miles=miles))
         except Exception as e:
             print(f"[Layer 3] Reddit error ({url}): {e}")
     print(f"[Layer 3] r/awardtravel extracted: {len(deals)} deals")
@@ -485,9 +550,12 @@ def verify_cash_price(origin, dest, cabin):
                         prices.append(val)
                         if not first_flight_desc:
                             fname = getattr(fl, "name", "")
+                            dep_t = getattr(fl, "departure", "")
+                            arr_t = getattr(fl, "arrival", "")
                             dur = getattr(fl, "duration", "")
                             stops = getattr(fl, "stops", "")
-                            first_flight_desc = f"{fname} • {dur} ({stops} stops)".strip()
+                            stop_lbl = "Nonstop" if str(stops) == "0" else f"{stops} stop(s)"
+                            first_flight_desc = (f"{fname} • {dur} ({stop_lbl})".strip(), f"{dep_t} → {arr_t}".strip() if dep_t else "Check schedule")
             if prices:
                 return min(prices), True, price_level, first_flight_desc
         except Exception:
@@ -603,7 +671,8 @@ def main():
         d["verified"] = is_verified
         d["price_level"] = price_level
         if flight_desc:
-            d["flights_taken"] = flight_desc
+            d["flights_taken"] = flight_desc[0]
+            d["flight_times"] = flight_desc[1]
         d["cpp"] = round(max(0.5, ((cash - d["taxes"]) / max(d["miles"], 1000)) * 100), 2)
         grade, grade_label = compute_deal_grade(d["cpp"], d["cabin"], d["miles"], price_level)
         d["grade"] = grade
