@@ -798,14 +798,34 @@ def send_ntfy_notification(alert_deals, unicorns, total_count, matched_count):
         priority = "urgent" if unicorns else "high"
 
     safe_title = title.encode("ascii", "ignore").decode("ascii")
+    action_btns = []
+    for d in alert_deals[:3]:
+        u = d.get("google_flights_url") or d.get("url") or "https://www.google.com/travel/flights"
+        lbl = f"{d['origin']}-{d['destination']} ({(d.get('airline') or 'Flight').split('/')[0].strip()[:12]})"
+        action_btns.append(f"view, {lbl}, {u}")
+    headers = {
+        "Title": safe_title,
+        "Priority": priority,
+        "Tags": "airplane,star",
+        "Markdown": "yes",
+        "Click": "https://jaustinglenn-cloud.github.io/awardradar/",
+    }
+    if action_btns:
+        headers["Actions"] = "; ".join(action_btns)
+
     try:
         resp = requests.post(
             f"https://ntfy.sh/{ntfy_topic}",
             data=body.encode("utf-8"),
-            headers={"Title": safe_title, "Priority": priority, "Tags": "airplane,star", "Markdown": "yes"},
+            headers=headers,
             timeout=15,
         )
-        print(f"[Alerts] Sent ntfy.sh push to '{ntfy_topic}' (HTTP {resp.status_code}, manual={is_manual_run}).")
+        print(f"[Alerts] ntfy.sh push to '{ntfy_topic}' -> HTTP {resp.status_code} (manual={is_manual_run})")
+        if resp.status_code >= 400:
+            print(f"[Alerts] ntfy error body: {resp.text[:250]} — retrying plain text...")
+            fallback_headers = {"Title": safe_title, "Priority": priority, "Tags": "airplane,star"}
+            r2 = requests.post(f"https://ntfy.sh/{ntfy_topic}", data=body.encode("utf-8"), headers=fallback_headers, timeout=15)
+            print(f"[Alerts] ntfy plain fallback -> HTTP {r2.status_code}")
     except Exception as e:
         print(f"[Alerts] ntfy.sh failed: {e}")
 
@@ -828,6 +848,8 @@ def main():
 
     deduped = {}
     for d in raw_deals:
+        if not d:
+            continue
         key = f"{d['origin']}-{d['destination']}-{d['cabin']}-{d['airline'][:18].lower()}-{d['travel_date']}"
         if key not in deduped or d.get("matched_search"):
             deduped[key] = d
