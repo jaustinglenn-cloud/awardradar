@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-19T12:46:40.231Z",
+  "updated_at": "2026-11-19T13:02:34.243Z",
   "total_count": 7,
   "deals": [
     {
@@ -12,6 +12,8 @@
       "destination_name": "Tokyo Haneda",
       "airline": "Japan Airlines",
       "flights_taken": "JL 11 • Nonstop (13h 40m)",
+      "flight_times": "11:05 AM → 3:45 PM (+1)",
+      "travel_date": "2026-12-03",
       "program": "American AAdvantage",
       "cabin": "First",
       "miles": 80000,
@@ -32,7 +34,7 @@
       "seatsaero_url": "https://seats.aero/search?origins=DFW&destinations=HND",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+HND+from+DFW",
       "is_unicorn_dfw_dal": true,
-      "found_at": "2026-11-19T12:28:40.231Z"
+      "found_at": "2026-11-19T12:44:34.206Z"
     },
     {
       "id": "deal-dfw-mxp-j",
@@ -44,6 +46,8 @@
       "destination_name": "Milan Malpensa",
       "airline": "Iberia",
       "flights_taken": "IB 6148 / IB 3252 • 1 stop (MAD, 12h 15m)",
+      "flight_times": "4:50 PM → 12:05 PM (+1)",
+      "travel_date": "2027-09-10",
       "program": "Iberia Plus",
       "cabin": "Business",
       "miles": 50500,
@@ -64,7 +68,7 @@
       "pointsyeah_url": "https://www.pointsyeah.com/",
       "seatsaero_url": "https://seats.aero/search?origins=DFW&destinations=MXP",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+MXP+from+DFW",
-      "found_at": "2026-11-19T12:11:40.231Z"
+      "found_at": "2026-11-19T12:27:34.206Z"
     },
     {
       "id": "deal-vce-dfw-j",
@@ -76,6 +80,8 @@
       "destination_name": "Dallas/Fort Worth",
       "airline": "Air France",
       "flights_taken": "AF 1127 / AF 158 • 1 stop (CDG, 13h 05m)",
+      "flight_times": "10:15 AM → 4:20 PM",
+      "travel_date": "2027-09-18",
       "program": "Air France/KLM Flying Blue",
       "cabin": "Business",
       "miles": 55000,
@@ -97,7 +103,7 @@
       "pointsyeah_url": "https://www.pointsyeah.com/",
       "seatsaero_url": "https://seats.aero/search?origins=VCE&destinations=DFW",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+DFW+from+VCE",
-      "found_at": "2026-11-19T11:41:40.231Z"
+      "found_at": "2026-11-19T11:57:34.206Z"
     },
     {
       "id": "deal-dfw-zrh-j",
@@ -109,6 +115,8 @@
       "destination_name": "Zurich",
       "airline": "American Airlines",
       "flights_taken": "AA 78 / BA 714 • 1 stop (LHR, 12h 40m)",
+      "flight_times": "5:25 PM → 1:05 PM (+1)",
+      "travel_date": "2027-09-11",
       "program": "American AAdvantage",
       "cabin": "Business",
       "miles": 57500,
@@ -127,7 +135,7 @@
       "pointsyeah_url": "https://www.pointsyeah.com/",
       "seatsaero_url": "https://seats.aero/search?origins=DFW&destinations=ZRH",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+ZRH+from+DFW",
-      "found_at": "2026-11-19T11:11:40.231Z"
+      "found_at": "2026-11-19T11:27:34.206Z"
     },
     {
       "id": "deal-dfw-mxp-y",
@@ -139,6 +147,8 @@
       "destination_name": "Milan Malpensa",
       "airline": "Air France / KLM",
       "flights_taken": "AF 159 / AF 1314 • 1 stop (CDG, 12h 50m)",
+      "flight_times": "3:45 PM → 11:35 AM (+1)",
+      "travel_date": "2027-09-10",
       "program": "Air France/KLM Flying Blue",
       "cabin": "Economy",
       "miles": 20000,
@@ -159,7 +169,7 @@
       "pointsyeah_url": "https://www.pointsyeah.com/",
       "seatsaero_url": "https://seats.aero/search?origins=DFW&destinations=MXP",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+MXP+from+DFW",
-      "found_at": "2026-11-19T10:41:40.231Z"
+      "found_at": "2026-11-19T10:57:34.206Z"
     },
     {
       "id": "deal-dal-lgb-y",
@@ -171,6 +181,8 @@
       "destination_name": "Long Beach",
       "airline": "Southwest Airlines",
       "flights_taken": "WN 1422 • Nonstop (3h 15m)",
+      "flight_times": "8:10 AM → 9:25 AM",
+      "travel_date": "2026-12-24",
       "program": "Southwest Rapid Rewards",
       "cabin": "Economy",
       "miles": 11500,
@@ -189,7 +201,7 @@
       "pointsyeah_url": "https://www.pointsyeah.com/",
       "seatsaero_url": "https://seats.aero/search?origins=DAL&destinations=LGB",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+LGB+from+DAL",
-      "found_at": "2026-11-19T10:06:40.231Z"
+      "found_at": "2026-11-19T10:22:34.206Z"
     },
     {
       "id": "deal-dal-lax-dl",
@@ -201,6 +213,8 @@
       "destination_name": "Los Angeles",
       "airline": "Delta Air Lines",
       "flights_taken": "DL 2219 • Nonstop (3h 20m)",
+      "flight_times": "1:30 PM → 2:50 PM",
+      "travel_date": "2026-12-24",
       "program": "Delta SkyMiles",
       "cabin": "Economy",
       "miles": 17500,
@@ -220,7 +234,7 @@
       "pointsyeah_url": "https://www.pointsyeah.com/",
       "seatsaero_url": "https://seats.aero/search?origins=DAL&destinations=LAX",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+LAX+from+DAL",
-      "found_at": "2026-11-19T09:16:40.231Z"
+      "found_at": "2026-11-19T09:32:34.206Z"
     }
   ]
 }
