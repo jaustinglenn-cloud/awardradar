@@ -1139,7 +1139,23 @@ def main():
     matched_list.sort(key=lambda d: (d["grade"], CABIN_PRIORITY.get(d["cabin"], 1), d["cpp"]), reverse=True)
     other_list.sort(key=lambda d: (d["is_unicorn_dfw_dal"], d["grade"], CABIN_PRIORITY.get(d["cabin"], 1), d["cpp"]), reverse=True)
 
-    final_deals = (matched_list[:20] + other_list[:15])
+    # Preserve user-captured iPhone Safari verified_live deals across scheduled runs
+    preserved_live = []
+    if os.path.exists(DEALS_FILE):
+        try:
+            with open(DEALS_FILE, "r", encoding="utf-8") as prev_f:
+                prev_data = json.load(prev_f)
+            today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            for pd in prev_data.get("deals", []):
+                if pd.get("verified_live"):
+                    td = str(pd.get("travel_dates", ""))
+                    m_dt = re.search(r"\d{4}-\d{2}-\d{2}", td)
+                    if not m_dt or m_dt.group(0) >= today_iso:
+                        preserved_live.append(pd)
+        except Exception:
+            preserved_live = []
+
+    final_deals = (preserved_live + matched_list[:20] + other_list[:15])
     final_deals.sort(key=lambda d: (d["grade"], CABIN_PRIORITY.get(d["cabin"], 1), d["cpp"]), reverse=True)
 
     alert_deals = []
@@ -1157,7 +1173,7 @@ def main():
     with open(DEALS_FILE, "w", encoding="utf-8") as f:
         json.dump({
             "updated_at": datetime.now(timezone.utc).isoformat(),
-            "app_version": "v2.7",
+            "app_version": "v2.8",
             "ntfy_status": ntfy_status,
             "ai_parser_active": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
             "transfer_bonuses": live_bonuses,
