@@ -166,17 +166,38 @@ def extract_miles(text):
     return None
 
 
-def extract_cabin(text):
+def extract_cabin(text, miles=None, is_long_haul=False):
     low = text.lower()
-    if any(k in low for k in ["first class", "ana f ", "jal f ", "the suite", "la premiere", "lufthansa first", "first (f)"]):
-        return "First"
-    if any(k in low for k in ["business", "qsuite", "polaris", "upper class", "mint", "delta one", "club suite", "the room", "lie-flat", " j "]):
-        return "Business"
-    if "premium economy" in low or "prem econ" in low:
+    # Check Economy / Premium Economy FIRST when explicitly mentioned alongside low miles
+    has_econ = any(k in low for k in ["economy", "coach", "main cabin", "basic economy"])
+    has_pe = ("premium economy" in low or "prem econ" in low)
+    has_first = any(k in low for k in ["first class", "ana f ", "jal f ", "the suite", "la premiere", "lufthansa first", "first (f)"])
+    has_biz = any(k in low for k in ["business class", "business", "qsuite", "polaris", "upper class", "mint", "delta one", "club suite", "the room", "lie-flat"])
+
+    # Hard anti-hallucination sanity guard: long-haul < 35k miles is NEVER Business or First
+    if is_long_haul and miles and miles < 35000:
+        return "Premium Economy" if has_pe else "Economy"
+
+    if has_pe:
         return "Premium Economy"
-    if "economy" in low or "coach" in low or "main cabin" in low:
+    if has_econ and not (has_biz or has_first):
         return "Economy"
-    return "Business"
+    if has_first and (not miles or not is_long_haul or miles >= 55000):
+        return "First"
+    if has_biz and (not miles or not is_long_haul or miles >= 35000):
+        return "Business"
+    if has_econ:
+        return "Economy"
+    return None
+
+
+def extract_taxes(text, default_tax=95):
+    m = re.search(r"(?:\+|taxes?|fees?)\s*\$\s*(\d{1,4}(?:\.\d{2})?)", text, re.I)
+    if m:
+        val = float(m.group(1))
+        if 5 <= val <= 1500:
+            return round(val, 2)
+    return default_tax
 
 
 def extract_program_and_airline(text):
@@ -243,6 +264,7 @@ def map_carrier_award_estimate(airline_name, origin, dest, cabin, cash_price):
 
 
 def extract_route(text):
+    """Strictly requires BOTH an explicit origin and destination in the text. Never fabricates DFW."""
     m = re.search(r"\b([A-Z]{3})\s*(?:->|→|–|-|to|/)\s*([A-Z]{3})\b", text)
     if m:
         o, d = m.group(1), m.group(2)
@@ -251,18 +273,14 @@ def extract_route(text):
     low = text.lower()
     found = []
     for key, code in CITY_TO_IATA.items():
-        idx = low.find(key)
-        if idx != -1 and code not in [c for _, c in found]:
-            found.append((idx, code))
+        # Word-boundary match prevents false hits like 'ord' inside 'affordable' or 'dal' inside 'modal'
+        m_city = re.search(r"\b" + re.escape(key) + r"\b", low)
+        if m_city and code not in [c for _, c in found]:
+            found.append((m_city.start(), code))
     found.sort(key=lambda x: x[0])
     if len(found) >= 2:
         return found[0][1], found[1][1]
-    if len(found) == 1:
-        code = found[0][1]
-        if code in REGION_MAP["US"]:
-            return code, "EUR"
-        return "DFW", code
-    return "DFW", "EUR"
+    return None, None
 
 
 def compute_deal_grade(cpp, cabin, miles, price_level="typical"):
@@ -335,14 +353,26 @@ def build_links(origin, dest, source_url, cabin="Business", airline="", travel_d
     }
 
 
-def make_deal(title, source, url, origin=None, dest=None, cabin=None, miles=None, taxes=195,
+def make_deal(title, source, url, origin=None, dest=None, cabin=None, miles=None, taxes=None,
               dates="Select Dates (Next 90 Days)", program=None, airline=None, flights_taken=None,
               flight_times="Check schedule", travel_date=None, cash_benchmark=None, price_level="typical",
-              verified=False, matched_search=False, itinerary_name=None):
-    o, d = (origin, dest) if (origin and dest) else extract_route(title)
-    cab = cabin or extract_cabin(title)
-    pts = miles or extract_miles(title) or (55000 if cab == "Business" else 75000 if cab == "First" else 18000)
-    prog, air = (program, airline) if (program and airline) else extract_program_and_airline(title)
+              verified=False, matched_search=False, itinerary_name=None, parse_text=None):
+    full_text = parse_text or title
+    o, d = (origin, dest) if (origin and dest) else extract_route(full_text)
+    if not o or not d or o == d:
+        return None
+    pts = miles if miles is not None else extract_miles(full_text)
+    if not pts:
+        return None
+    is_lh = (o in LONG_HAUL_AIRPORTS) or (d in LONG_HAUL_AIRPORTS)
+    cab = cabin or extract_cabin(full_text, miles=pts, is_long_haul=is_lh)
+    if not cab:
+        return None
+    # Final long-haul cabin sanity guard
+    if is_lh and pts < 35000 and cab in ("Business", "First"):
+        cab = "Economy"
+    tax_val = taxes if taxes is not None else extract_taxes(full_text, default_tax=150 if is_lh else 6)
+    prog, air = (program, airline) if (program and airline) else extract_program_and_airline(full_text)
     currencies = PROGRAM_CURRENCIES.get(prog, ["Chase UR", "American AAdvantage", "Delta SkyMiles"])
     m_date = re.search(r"(\d{4}-\d{2}-\d{2})", str(travel_date or dates or ""))
     t_date = m_date.group(1) if m_date else (datetime.now(timezone.utc) + timedelta(days=45)).strftime("%Y-%m-%d")
@@ -364,7 +394,7 @@ def make_deal(title, source, url, origin=None, dest=None, cabin=None, miles=None
         "program": prog,
         "cabin": cab,
         "miles": pts,
-        "taxes": taxes,
+        "taxes": tax_val,
         "cash_benchmark": cash_benchmark,
         "price_level": price_level,
         "cpp": None,
@@ -559,7 +589,8 @@ def layer1_pointsyeah_and_promos():
                     seen.add(txt)
                     href = a["href"]
                     full_url = href if href.startswith("http") else f"https://www.pointsyeah.com{href}"
-                    deals.append(make_deal(txt, "PointsYeah Deals", full_url))
+                    d_item = make_deal(txt, "PointsYeah Deals", full_url)
+                    if d_item: deals.append(d_item)
                     if len(deals) >= 8:
                         break
         print(f"[Layer 1A] PointsYeah scraped: {len(deals)} deals")
@@ -593,7 +624,8 @@ def layer1_pointsyeah_and_promos():
                     continue
                 if any(k in txt.lower() for k in AWARD_KEYWORDS):
                     seen_mf.add(txt)
-                    deals.append(make_deal(txt, "MilesFeed Aggregator", href))
+                    d_item = make_deal(txt, "MilesFeed Aggregator", href)
+                    if d_item: deals.append(d_item)
                     if len(seen_mf) >= 6:
                         break
             print(f"[Layer 1C] MilesFeed scraped: {len(seen_mf)} deals")
@@ -617,7 +649,8 @@ def layer2_rss_feeds():
                 combined = f"{title} {summary[:300]}"
                 if any(k in combined.lower() for k in AWARD_KEYWORDS):
                     link = entry.get("link", feed_url)
-                    deals.append(make_deal(title, f"{source_name} RSS", link))
+                    d_item = make_deal(title, f"{source_name} RSS", link, parse_text=combined)
+                    if d_item: deals.append(d_item)
                     count += 1
                     if count >= 4:
                         break
@@ -659,7 +692,8 @@ def layer3_reddit_awardtravel():
                 if miles or has_deal_signal:
                     seen_ids.add(pid)
                     permalink = f"https://www.reddit.com{post.get('permalink', '')}"
-                    deals.append(make_deal(title, sub_name, permalink, miles=miles))
+                    d_item = make_deal(title, sub_name, permalink, miles=miles, parse_text=combined)
+                    if d_item: deals.append(d_item)
         except Exception as e:
             print(f"[Layer 3] Reddit error ({url}): {e}")
     print(f"[Layer 3] Reddit extracted: {len(deals)} deals")
@@ -732,36 +766,44 @@ def match_itinerary(deal, searches):
     return False, None
 
 
-def send_ntfy_notification(alert_deals, unicorns, total_count):
-    # Accept BOTH NTFY_TOPIC and NFTY_TOPIC so either spelling works seamlessly
-    ntfy_topic = (os.environ.get("NTFY_TOPIC") or os.environ.get("NFTY_TOPIC") or "").strip()
+def send_ntfy_notification(alert_deals, unicorns, total_count, matched_count):
+    # Accept BOTH NTFY_TOPIC and NFTY_TOPIC and strip any accidental https://ntfy.sh/ prefix
+    raw_topic = (os.environ.get("NTFY_TOPIC") or os.environ.get("NFTY_TOPIC") or "").strip()
+    ntfy_topic = re.sub(r"^https?://ntfy\.sh/", "", raw_topic, flags=re.I).strip("/")
     if not ntfy_topic:
         print("[Alerts] No NTFY_TOPIC or NFTY_TOPIC secret configured — skipping push.")
         return
 
+    is_manual_run = os.environ.get("GITHUB_EVENT_NAME", "") == "workflow_dispatch"
     if not alert_deals:
-        print("[Alerts] No deals met alert threshold today.")
-        return
+        if not is_manual_run:
+            print("[Alerts] No deals met alert threshold today.")
+            return
+        title = f"AwardRadar Scan Complete ({total_count} Live Flights)"
+        body = f"Scanned your itineraries ({matched_count} matches, {total_count} total live flights). No Grade 4-5 deals or DFW/DAL Unicorns crossed your alert threshold on this run."
+        priority = "default"
+    else:
+        summary_lines = [
+            f"- [Grade {d['grade']}/5{' UNICORN' if d.get('is_unicorn_dfw_dal') else ''}] {d['origin']}->{d['destination']} ({d['cabin']}): {d['miles']:,} pts + ${d['taxes']} ({d['cpp']}c CPP) | {d['flight_times']} | {d['google_flights_url']}"
+            for d in alert_deals[:5]
+        ]
+        body = "\n".join(summary_lines)
+        title = (
+            f"AwardRadar: {len(unicorns)} DFW/DAL Unicorn(s) & {len(alert_deals)} Alerts"
+            if unicorns else
+            f"AwardRadar: {len(alert_deals)} Flight Alert(s) ({total_count} Live)"
+        )
+        priority = "urgent" if unicorns else "high"
 
-    summary_lines = [
-        f"• [Grade {d['grade']}/5{' 🦄 DFW/DAL UNICORN' if d.get('is_unicorn_dfw_dal') else ''}] {d['origin']}→{d['destination']} ({d['cabin']}): {d['miles']:,} pts + ${d['taxes']} ({d['cpp']}¢ CPP) • {d['flight_times']} — {d['google_flights_url']}"
-        for d in alert_deals[:5]
-    ]
-    body = "\n".join(summary_lines)
-    title = (
-        f"AwardRadar: {len(unicorns)} DFW/DAL Unicorn(s) & {len(alert_deals)} Alerts"
-        if unicorns else
-        f"AwardRadar: {len(alert_deals)} Flight Alert(s) ({total_count} Live)"
-    )
-
+    safe_title = title.encode("ascii", "ignore").decode("ascii")
     try:
         resp = requests.post(
             f"https://ntfy.sh/{ntfy_topic}",
             data=body.encode("utf-8"),
-            headers={"Title": title, "Priority": "urgent" if unicorns else "high", "Tags": "airplane,star"},
+            headers={"Title": safe_title, "Priority": priority, "Tags": "airplane,star"},
             timeout=15,
         )
-        print(f"[Alerts] Sent ntfy.sh push to '{ntfy_topic}' (HTTP {resp.status_code}).")
+        print(f"[Alerts] Sent ntfy.sh push to '{ntfy_topic}' (HTTP {resp.status_code}, manual={is_manual_run}).")
     except Exception as e:
         print(f"[Alerts] ntfy.sh failed: {e}")
 
@@ -833,7 +875,7 @@ def main():
             alert_deals.append(d)
 
     print(f"=== Saved {len(final_deals)} flights ({len(matched_list)} itinerary matches, {len(unicorns)} DFW/DAL unicorns) ===")
-    send_ntfy_notification(alert_deals, unicorns, len(final_deals))
+    send_ntfy_notification(alert_deals, unicorns, len(final_deals), len(matched_list))
 
 
 if __name__ == "__main__":
