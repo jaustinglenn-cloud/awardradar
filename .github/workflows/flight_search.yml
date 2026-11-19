@@ -26,14 +26,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run 5-Layer Zero-Cost Waterfall Scraper
+      - name: Run AwardRadar Live Flight & Award Engine
         env:
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
           SEATS_AERO_API_KEY: ${{ secrets.SEATS_AERO_API_KEY }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          NFTY_TOPIC: ${{ secrets.NFTY_TOPIC }}
         run: |
           python scripts/search_flights.py
 
