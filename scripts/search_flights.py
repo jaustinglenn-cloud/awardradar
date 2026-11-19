@@ -572,7 +572,7 @@ def make_deal(title, source, url, origin=None, dest=None, cabin=None, miles=None
                 price_level = "low"
                 if taxes is None:
                     taxes = 0
-    if not pts or not cab:
+    if (pts is None or (pts == 0 and not (price_level == "low" and cash_benchmark))) or not cab:
         return None
     if is_lh and pts < 35000 and cab in ("Business", "First"):
         cab = "Economy"
@@ -762,19 +762,24 @@ def layer0_direct_itineraries(searches):
                     if not rows:
                         rows = _query_fast_flights(o, d, query_date, cab)
                     for r in rows[:2]:
-                        prog, est_pts, est_tax = map_carrier_award_estimate(r["airline"], o, d, cab, r["cash"])
+                        # Zero partner-chart guessing: ONLY surface Google Flights results when genuinely flagged LOW
+                        if r.get("price_level") != "low":
+                            continue
                         gf_url = build_links(o, d, "", cabin=cab, airline=r["airline"], travel_date=query_date)["google_flights_url"]
-                        deals.append(make_deal(
-                            title=f"{o} → {d} {r['airline']} {cab} (Live Schedule + {prog} Partner Chart)",
-                            source=r["source"],
+                        d_cash = make_deal(
+                            title=f"{o} → {d} {r['airline']} {cab} — Google Flights LOW Cash Fare (${r['cash']:,})",
+                            source=f"{r['source']} (LOW Cash)",
                             url=gf_url,
-                            origin=o, dest=d, cabin=cab, miles=est_pts, taxes=est_tax,
-                            dates=display_date, program=prog, airline=r["airline"],
+                            origin=o, dest=d, cabin=cab, miles=0, taxes=0,
+                            dates=display_date, program="Cash Fare (Google Flights LOW)", airline=r["airline"],
                             flights_taken=r["flights_taken"], flight_times=r["flight_times"],
                             travel_date=query_date, cash_benchmark=r["cash"],
-                            price_level=r["price_level"], verified=True,
+                            price_level="low", verified=True,
                             matched_search=True, itinerary_name=itin_name,
-                        ))
+                        )
+                        if d_cash:
+                            d_cash["is_cash_deal"] = True
+                            deals.append(d_cash)
     print(f"[Layer 0] Direct itinerary scans returned: {len(deals)} live flights")
     return deals
 
@@ -1034,9 +1039,11 @@ def send_ntfy_notification(alert_deals, unicorns, total_count, matched_count):
             stars = "★" * int(d["grade"]) + "☆" * (5 - int(d["grade"]))
             date_str = d.get("travel_date") or d.get("dates") or "Flexible"
             airline_str = (d.get("airline") or d.get("program") or "Airline").split("/")[0].strip()
+            cost_lbl = f"${int(d['cash_benchmark']):,} cash" if (d.get("is_cash_deal") or d["miles"] == 0) else f"{d['miles']:,} pts"
+            val_lbl = "Google Flights LOW" if (d.get("is_cash_deal") or d["miles"] == 0) else f"{d['cpp']}c CPP"
             entries.append(
-                f"{stars} | {d['miles']:,} pts | {d['origin']} -> {d['destination']}\n"
-                f"{date_str} | {airline_str} | {d['cpp']}c CPP"
+                f"{stars} | {cost_lbl} | {d['origin']} -> {d['destination']}\n"
+                f"{date_str} | {airline_str} | {val_lbl}"
             )
         entries.append("Tap notification to open AwardRadar & deal links")
         body = "\n\n".join(entries)
@@ -1109,8 +1116,16 @@ def main():
 
         cash = d.get("cash_benchmark") or HEURISTIC_CASH.get(d["cabin"], 3200)
         d["cash_benchmark"] = cash
-        d["cpp"] = round(max(0.5, ((cash - d["taxes"]) / max(d["miles"], 1000)) * 100), 2)
-        grade, grade_label = compute_deal_grade(d["cpp"], d["cabin"], d["miles"], d.get("price_level", "typical"))
+        if d.get("is_cash_deal") or d["miles"] == 0:
+            d["cpp"] = 0.0
+            is_lh_cash = (d["origin"] in LONG_HAUL_AIRPORTS) or (d["destination"] in LONG_HAUL_AIRPORTS)
+            if d["cabin"] in ("Business", "First") and is_lh_cash and cash <= 2200:
+                grade, grade_label = 3, "Unusually Low Business Cash"
+            else:
+                grade, grade_label = 2, "Google Flights Low Cash"
+        else:
+            d["cpp"] = round(max(0.5, ((cash - d["taxes"]) / max(d["miles"], 1000)) * 100), 2)
+            grade, grade_label = compute_deal_grade(d["cpp"], d["cabin"], d["miles"], d.get("price_level", "typical"))
         d["grade"] = grade
         d["grade_label"] = grade_label
         d["is_unicorn_dfw_dal"] = (grade == 5 and d["origin"] in ("DFW", "DAL") and not matched)
@@ -1142,7 +1157,7 @@ def main():
     with open(DEALS_FILE, "w", encoding="utf-8") as f:
         json.dump({
             "updated_at": datetime.now(timezone.utc).isoformat(),
-            "app_version": "v2.6",
+            "app_version": "v2.7",
             "ntfy_status": ntfy_status,
             "ai_parser_active": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
             "transfer_bonuses": live_bonuses,
