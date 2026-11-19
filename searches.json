@@ -73,24 +73,6 @@
         "Delta SkyMiles"
       ],
       "active": true
-    },
-    {
-      "id": "cfg-1795104217044",
-      "name": "DFW → MXP",
-      "origin": "DFW",
-      "destination": "MXP",
-      "start_date": "2027-11-03",
-      "end_date": "2027-11-17",
-      "cabin": "Any",
-      "max_points": 75000,
-      "min_cpp": 2,
-      "dates": "2027-11-03 to 2027-11-17",
-      "currencies": [
-        "Chase UR",
-        "American AAdvantage",
-        "Delta SkyMiles"
-      ],
-      "active": true
     }
   ]
 }
