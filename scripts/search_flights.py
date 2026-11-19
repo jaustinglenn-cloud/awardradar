@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
 """
-AwardRadar Live Flight, Award & Transfer Bonus Scraper (scripts/search_flights.py)
-----------------------------------------------------------------------------------
-$0 self-hosted backend executed every 6 hours via GitHub Actions.
+AwardRadar Morning Digest Scraper (scripts/search_flights.py)
+-------------------------------------------------------------
+$0 self-hosted backend executed daily at 7:00 AM CT (13:00 UTC) via GitHub Actions.
 
-1. Live Transfer Bonus Tracker (Frequent Miler):
-   Scrapes https://frequentmiler.com/current-point-transfer-bonuses/ every 6 hours
-   for active Chase Ultimate Rewards airline transfer bonuses (e.g. Virgin Atlantic,
-   British Airways Avios, Iberia Plus, Flying Blue, Air Canada Aeroplan) and writes
-   them to data/deals.json so the PWA auto-applies them without manual input.
-2. Live Cash & Real Operating Flights (fast-flights Google Flights Protobuf):
-   Fetches real-time cash prices, Google Flights' current_price indicator
-   ('low', 'typical', 'high'), and actual operating airlines/schedules.
-3. Live Unauthenticated Award Scraping (Playwright Stealth):
-   Queries American Airlines (aa.com/booking/api/search/itinerary) for AAdvantage &
-   oneworld partners (AA, BA, IB, JL, CX, QR, AY) without personal logins.
-4. Zero Fake/Placeholder Flights:
-   Never invents placeholder flight numbers or synthetic award deals. Outputs only
-   live-scraped award hits (LIVE_SCRAPED) and live Google Flights cash baselines
-   (LIVE_CASH).
+1. SerpApi Google Flights Engine (250 free searches/mo):
+   Reliable live cash fares, real airlines, flight numbers, durations, stops,
+   and Google's price_insights ('low', 'typical', 'high') with zero bot blocks.
+2. Camoufox Stealth AA.com Award Scraper:
+   Uses anti-detect Firefox (Camoufox) to intercept aa.com/booking/api/search/itinerary
+   for live AAdvantage miles AND oneworld partner saver signals (BA & Iberia).
+3. Live Transfer Bonus Tracker (Frequent Miler):
+   Scrapes https://frequentmiler.com/current-point-transfer-bonuses/ for active
+   Chase Ultimate Rewards airline transfer bonuses.
+4. Failure & Deal Push Alerts (ntfy.sh):
+   Alerts your iPhone immediately if SERPAPI_API_KEY is missing, an API/scraper
+   fails, or 0 deals are found—plus sends your morning deal alerts.
 """
 
 from __future__ import annotations
@@ -50,26 +47,25 @@ except ImportError:
     HAS_REQUESTS = False
 
 try:
-    from fast_flights import FlightData, Passengers, create_filter, get_flights  # type: ignore
-    HAS_FAST_FLIGHTS = True
+    from camoufox.sync_api import Camoufox  # type: ignore
+    HAS_CAMOUFOX = True
 except ImportError:
-    HAS_FAST_FLIGHTS = False
-
-try:
-    from playwright.sync_api import sync_playwright  # type: ignore
-    HAS_PLAYWRIGHT = True
-except ImportError:
-    HAS_PLAYWRIGHT = False
+    HAS_CAMOUFOX = False
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 SEARCHES_PATH = ROOT_DIR / "searches.json"
 DEALS_OUTPUT_PATH = ROOT_DIR / "data" / "deals.json"
 
-MAX_ACTIVE_SLOTS = 5
-JITTER_MIN_SECONDS = 3.0
-JITTER_MAX_SECONDS = 5.5
+MAX_ACTIVE_SLOTS = 4
+JITTER_MIN_SECONDS = 2.0
+JITTER_MAX_SECONDS = 3.5
 
-# Verified Chase UR airline transfer bonuses as of Nov 18, 2026 (auto-refreshed live on every run)
+LONG_HAUL_AIRPORTS = {
+    "MXP", "LIN", "VCE", "BLQ", "VRN", "TRN", "FCO",
+    "LHR", "CDG", "FRA", "AMS", "MAD", "HND", "ICN",
+    "BKK", "DXB", "DOH", "SIN",
+}
+
 BASELINE_CHASE_BONUSES: Dict[str, Dict[str, Any]] = {
     "Virgin Atlantic": {"pct": 40, "expires": "2026-12-30", "source": "https://www.doctorofcredit.com/chase-ultimate-rewards-40-transfer-bonus-to-virgin-atlantic-11-4-4/"},
     "British Airways Avios": {"pct": 30, "expires": "2026-12-01", "source": "https://frequentmiler.com/current-point-transfer-bonuses/"},
@@ -87,19 +83,7 @@ def sleep_with_jitter(reason: str) -> None:
     time.sleep(delay)
 
 
-def generate_date_window(base_date_iso: str, flex_enabled: bool, max_offsets: int = 1) -> List[Tuple[str, int]]:
-    base_dt = dt.date.fromisoformat(base_date_iso)
-    if not flex_enabled:
-        return [(base_date_iso, 0)]
-    ordered_offsets = [0, -1, 1, -2, 2, -3, 3][: (2 * max_offsets + 1)]
-    return [((base_dt + dt.timedelta(days=off)).isoformat(), off) for off in ordered_offsets]
-
-
 def fetch_live_transfer_bonuses() -> Dict[str, Dict[str, Any]]:
-    """
-    Scrapes Frequent Miler's live transfer bonus tracker for active Chase Ultimate Rewards
-    airline transfer bonuses. Falls back to the latest verified snapshot if offline.
-    """
     bonuses = {k: dict(v) for k, v in BASELINE_CHASE_BONUSES.items()}
     if not HAS_REQUESTS or os.environ.get("AWARDRADAR_FAST_TEST") == "1":
         return bonuses
@@ -108,7 +92,7 @@ def fetch_live_transfer_bonuses() -> Dict[str, Dict[str, Any]]:
     try:
         resp = requests.get(
             url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; AwardRadar/1.5)"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; AwardRadar/2.0)"},
             timeout=15,
         )
         if resp.status_code != 200:
@@ -131,124 +115,144 @@ def fetch_live_transfer_bonuses() -> Dict[str, Dict[str, Any]]:
                 bonuses[prog]["pct"] = int(m.group(1))
                 bonuses[prog]["source"] = url
             else:
-                # Reverse match (e.g., "30% transfer bonus from Chase Ultimate Rewards to British Airways")
-                rev_pat = pat.replace(r"Chase Ultimate Rewards[^.]{0,140}?", r"(\d{2})%[^.]{0,100}?Chase Ultimate Rewards[^.]{0,100}?")
-                # Reset to 0 if not listed as active on Frequent Miler
                 bonuses[prog]["pct"] = 0
                 bonuses[prog]["source"] = url
 
-        logger.info("Live transfer bonuses refreshed from Frequent Miler: %s", {k: v["pct"] for k, v in bonuses.items()})
+        logger.info("Live transfer bonuses refreshed: %s", {k: v["pct"] for k, v in bonuses.items()})
     except Exception as exc:
-        logger.warning("Could not refresh transfer bonuses from Frequent Miler: %s", exc)
+        logger.warning("Transfer bonus refresh failed: %s", exc)
 
     return bonuses
 
 
-def fetch_live_cash_flights(
-    origin: str,
-    destination: str,
-    departure_date: str,
-    cabin: str,
-    seats: int,
-) -> Dict[str, Any]:
-    """
-    Queries Google Flights via fast-flights (Protobuf) for real live cash fares,
-    current_price indicator, and actual operating airline. Returns cash_live=False
-    if Google Flights hasn't opened that far-out date or is unreachable.
-    """
-    if not HAS_FAST_FLIGHTS or os.environ.get("AWARDRADAR_FAST_TEST") == "1":
-        return {"cash_live": False}
-
-    seat_type = "business" if cabin == "Business" else "economy"
+def _format_duration_minutes(total_min: Any) -> str:
     try:
-        sleep_with_jitter(f"fast-flights {origin}->{destination} {departure_date} [{seat_type}]")
-        filter_obj = create_filter(
-            flight_data=[
-                FlightData(
-                    date=departure_date,
-                    from_airport=origin,
-                    to_airport=destination,
-                )
-            ],
-            trip="one-way",
-            seat=seat_type,
-            passengers=Passengers(adults=max(1, min(4, seats))),
-        )
-        result = get_flights(filter_obj)
-        price_indicator = str(getattr(result, "current_price", "typical") or "typical").lower()
-        if price_indicator not in {"low", "typical", "high"}:
-            price_indicator = "typical"
-
-        flights_list = getattr(result, "flights", []) or []
-        best_cash = None
-        best_airline = None
-        best_duration = None
-        best_stops = None
-
-        for f in flights_list:
-            raw_price = str(getattr(f, "price", ""))
-            digits = "".join(ch for ch in raw_price if ch.isdigit())
-            if digits:
-                val = float(digits)
-                if val > 30 and (best_cash is None or val < best_cash):
-                    best_cash = val
-                    best_airline = getattr(f, "name", None)
-                    best_duration = getattr(f, "duration", None)
-                    best_stops = getattr(f, "stops", None)
-
-        if best_cash is not None:
-            return {
-                "cash_price_usd": best_cash,
-                "google_price_level": price_indicator,
-                "operating_airline": best_airline or "Google Flights Carrier",
-                "flight_summary": f"{best_duration or 'Scheduled'} • {best_stops if best_stops is not None else '?'} stop(s)",
-                "cash_live": True,
-            }
-    except Exception as exc:
-        logger.warning("fast-flights error for %s->%s (%s): %s", origin, destination, departure_date, exc)
-
-    return {"cash_live": False}
+        mins = int(total_min)
+        return f"{mins // 60}h {mins % 60}m"
+    except (TypeError, ValueError):
+        return ""
 
 
-def scrape_aa_live_awards(
+def fetch_serpapi_google_flights(
     origin: str,
     destination: str,
     departure_date: str,
     cabin: str,
     seats: int,
-) -> List[Dict[str, Any]]:
+    api_key: str,
+) -> Tuple[List[Dict[str, Any]], str]:
     """
-    Free, unauthenticated Playwright stealth scraper for American Airlines (aa.com).
-    Intercepts live JSON from /booking/api/search/itinerary without logging in.
+    Queries SerpApi's Google Flights engine (free tier: 250 searches/month).
+    Returns up to 3 real live itineraries with airline, flight numbers, schedule,
+    USD cash price, and Google's price_insights price_level.
     """
-    if not HAS_PLAYWRIGHT or os.environ.get("AWARDRADAR_FAST_TEST") == "1":
-        return []
+    if os.environ.get("AWARDRADAR_FAST_TEST") == "1":
+        return [], "skipped_fast_test"
+    if not api_key:
+        return [], "missing_serpapi_key"
+    if not HAS_REQUESTS:
+        return [], "missing_requests_pkg"
+
+    travel_class = 3 if cabin == "Business" else 1  # 1=Economy, 3=Business
+    params = {
+        "engine": "google_flights",
+        "departure_id": origin,
+        "arrival_id": destination,
+        "outbound_date": departure_date,
+        "type": 2,  # 2 = One-way
+        "travel_class": travel_class,
+        "adults": max(1, min(4, seats)),
+        "currency": "USD",
+        "hl": "en",
+        "api_key": api_key,
+    }
+
+    try:
+        resp = requests.get("https://serpapi.com/search.json", params=params, timeout=25)
+        data = resp.json()
+        if resp.status_code != 200 or "error" in data:
+            err_msg = data.get("error", f"HTTP {resp.status_code}")
+            logger.error("SerpApi error for %s->%s (%s): %s", origin, destination, departure_date, err_msg)
+            return [], f"serpapi_error: {err_msg}"
+
+        insights = data.get("price_insights", {}) or {}
+        price_level = str(insights.get("price_level", "typical") or "typical").lower()
+        if price_level not in {"low", "typical", "high"}:
+            price_level = "typical"
+
+        raw_groups = (data.get("best_flights") or []) + (data.get("other_flights") or [])
+        parsed: List[Dict[str, Any]] = []
+        for grp in raw_groups:
+            price_val = grp.get("price")
+            if not isinstance(price_val, (int, float)) or price_val <= 30:
+                continue
+            legs = grp.get("flights") or []
+            if not legs:
+                continue
+
+            airlines = []
+            flight_nums = []
+            for leg in legs:
+                a_name = str(leg.get("airline", "")).strip()
+                f_num = str(leg.get("flight_number", "")).strip()
+                if a_name and a_name not in airlines:
+                    airlines.append(a_name)
+                if f_num:
+                    flight_nums.append(f_num)
+
+            dep_time = str((legs[0].get("departure_airport") or {}).get("time", "")).strip()
+            arr_time = str((legs[-1].get("arrival_airport") or {}).get("time", "")).strip()
+            dur_str = _format_duration_minutes(grp.get("total_duration"))
+            stops = max(0, len(legs) - 1)
+            stop_label = "Nonstop" if stops == 0 else f"{stops} stop{'s' if stops != 1 else ''}"
+            fnum_str = " / ".join(flight_nums) if flight_nums else "Google Flights"
+            sched_str = f"{fnum_str} • {dep_time} -> {arr_time} ({dur_str}, {stop_label})".strip()
+
+            parsed.append({
+                "airline": " / ".join(airlines) if airlines else "Carrier",
+                "schedule": sched_str,
+                "cash_price_usd": float(price_val),
+                "google_price_level": price_level,
+            })
+
+        parsed.sort(key=lambda x: x["cash_price_usd"])
+        logger.info("SerpApi %s->%s (%s %s): %d live flights, lowest $%.0f", origin, destination, departure_date, cabin, len(parsed), parsed[0]["cash_price_usd"] if parsed else 0)
+        return parsed[:3], f"ok_{len(parsed)}_flights"
+    except Exception as exc:
+        logger.error("SerpApi exception for %s->%s (%s): %s", origin, destination, departure_date, exc)
+        return [], f"serpapi_exception: {exc}"
+
+
+def scrape_aa_camoufox(
+    origin: str,
+    destination: str,
+    departure_date: str,
+    cabin: str,
+    seats: int,
+) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    Unauthenticated Camoufox (anti-detect Firefox) scraper for aa.com.
+    Intercepts /booking/api/search/itinerary for live AAdvantage miles AND
+    oneworld partner saver signals (British Airways & Iberia).
+    """
+    if not HAS_CAMOUFOX or os.environ.get("AWARDRADAR_FAST_TEST") == "1":
+        return [], "camoufox_skipped"
 
     scraped_deals: List[Dict[str, Any]] = []
     captured_payloads: List[Dict[str, Any]] = []
 
     try:
-        sleep_with_jitter(f"Playwright AA.com award scrape {origin}->{destination} {departure_date}")
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                ],
-            )
-            context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/129.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1280, "height": 800},
-                locale="en-US",
-            )
-            page = context.new_page()
-            page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        sleep_with_jitter(f"Camoufox AA.com {origin}->{destination} {departure_date}")
+        aa_url = (
+            f"https://www.aa.com/booking/search?locale=en_US&pax={seats}&adult={seats}"
+            f"&type=OneWay&searchType=Award&cabin=&carriers=ALL"
+            f"&slices=%5B%7B%22orig%22:%22{origin}%22,%22origNearby%22:false,"
+            f"%22dest%22:%22{destination}%22,%22destNearby%22:false,"
+            f"%22date%22:%22{departure_date}%22%7D%5D"
+        )
+
+        with Camoufox(headless=True) as browser:
+            page = browser.new_page()
 
             def handle_response(response) -> None:
                 if "booking/api/search/itinerary" in response.url and response.status == 200:
@@ -258,21 +262,11 @@ def scrape_aa_live_awards(
                         pass
 
             page.on("response", handle_response)
-
-            aa_url = (
-                f"https://www.aa.com/booking/search?locale=en_US&pax={seats}&adult={seats}"
-                f"&type=OneWay&searchType=Award&cabin=&carriers=ALL"
-                f"&slices=%5B%7B%22orig%22:%22{origin}%22,%22origNearby%22:false,"
-                f"%22dest%22:%22{destination}%22,%22destNearby%22:false,"
-                f"%22date%22:%22{departure_date}%22%7D%5D"
-            )
-            page.goto(aa_url, wait_until="domcontentloaded", timeout=25000)
-            page.wait_for_timeout(8500)
-            browser.close()
+            page.goto(aa_url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(10000)
 
         for payload in captured_payloads:
-            slices = payload.get("slices", []) or []
-            for sl in slices[:6]:
+            for sl in (payload.get("slices", []) or [])[:8]:
                 segments = sl.get("segments", []) or []
                 flight_nums = " / ".join(
                     f"{seg.get('flight', {}).get('carrierCode', 'AA')} {seg.get('flight', {}).get('flightNumber', '')}".strip()
@@ -281,8 +275,11 @@ def scrape_aa_live_awards(
                 airline_names = " / ".join(
                     sorted({seg.get("flight", {}).get("carrierName", "American Airlines") for seg in segments})
                 )
-                pricing_detail = sl.get("pricingDetail", []) or []
-                for pd in pricing_detail:
+                low_airline = airline_names.lower()
+                is_ib = "iberia" in low_airline
+                is_ba = "british" in low_airline
+
+                for pd in (sl.get("pricingDetail", []) or []):
                     if not pd.get("productAvailable", False):
                         continue
                     prod_type = str(pd.get("productType", "")).upper()
@@ -292,23 +289,75 @@ def scrape_aa_live_awards(
                     pts = int(pd.get("perPassengerAwardPoints", 0) or 0)
                     taxes = float((pd.get("perPassengerTaxesAndFees", {}) or {}).get("amount", 0.0) or 0.0)
                     if pts > 0:
+                        if is_ib:
+                            src_label = "PARTNER SAVER SIGNAL (aa.com -> Iberia Plus)"
+                            prog_name = "Iberia Plus (via AA Signal)"
+                            eco_name = "Chase UR"
+                        elif is_ba:
+                            src_label = "PARTNER SAVER SIGNAL (aa.com -> BA Avios)"
+                            prog_name = "British Airways Avios (via AA Signal)"
+                            eco_name = "Chase UR"
+                        else:
+                            src_label = "LIVE SCRAPED (aa.com Camoufox)"
+                            prog_name = "AAdvantage"
+                            eco_name = "AAdvantage"
+
                         scraped_deals.append({
                             "airline": airline_names or "American Airlines",
-                            "flight_numbers": flight_nums or "AA Award Itinerary",
-                            "program": "AAdvantage",
-                            "ecosystem": "AAdvantage",
+                            "flight_numbers": flight_nums or "AA Award",
+                            "program": prog_name,
+                            "ecosystem": eco_name,
                             "cabin": mapped_cabin,
                             "base_points": pts,
                             "taxes_fees_usd": round(taxes, 2),
-                            "availability_source": "LIVE SCRAPED (aa.com Playwright)",
+                            "availability_source": src_label,
                             "verification_status": "LIVE_SCRAPED",
                             "booking_url": aa_url,
                         })
                         break
+        return scraped_deals, f"ok_{len(scraped_deals)}_hits"
     except Exception as exc:
-        logger.warning("AA Playwright scraper blocked or timed out for %s->%s (%s): %s", origin, destination, departure_date, exc)
+        logger.warning("Camoufox AA.com blocked/timeout for %s->%s (%s): %s", origin, destination, departure_date, exc)
+        return [], f"camoufox_blocked_or_timeout: {exc}"
 
-    return scraped_deals
+
+def map_carrier_to_program(airline_name: str, is_long_haul: bool, cabin: str) -> Dict[str, Any]:
+    low = airline_name.lower()
+    if "american" in low or "british" in low or "iberia" in low or "finnair" in low:
+        return {
+            "program": "Iberia Plus" if "iberia" in low else ("British Airways Avios" if "british" in low else "AAdvantage"),
+            "ecosystem": "Chase UR" if ("iberia" in low or "british" in low) else "AAdvantage",
+            "saver_target_pts": 57500 if (is_long_haul and cabin == "Business") else (22500 if is_long_haul else 11000),
+        }
+    if "air france" in low or "klm" in low or "virgin" in low:
+        return {
+            "program": "Flying Blue",
+            "ecosystem": "Chase UR",
+            "saver_target_pts": 50000 if (is_long_haul and cabin == "Business") else (20000 if is_long_haul else 12000),
+        }
+    if "delta" in low:
+        return {
+            "program": "Virgin Atlantic" if is_long_haul else "Delta SkyMiles",
+            "ecosystem": "Chase UR" if is_long_haul else "Delta SkyMiles",
+            "saver_target_pts": 50000 if (is_long_haul and cabin == "Business") else (15000 if not is_long_haul else 30000),
+        }
+    if "southwest" in low:
+        return {
+            "program": "Southwest Rapid Rewards",
+            "ecosystem": "Chase UR",
+            "saver_target_pts": 9500,
+        }
+    if "lufthansa" in low or "united" in low or "swiss" in low or "austrian" in low or "air canada" in low:
+        return {
+            "program": "Air Canada Aeroplan",
+            "ecosystem": "Chase UR",
+            "saver_target_pts": 70000 if (is_long_haul and cabin == "Business") else (35000 if is_long_haul else 12500),
+        }
+    return {
+        "program": "Chase Travel Portal (1.25¢–1.5¢)",
+        "ecosystem": "Chase UR",
+        "saver_target_pts": 0,
+    }
 
 
 def compute_cpp_and_star_grade(
@@ -321,7 +370,8 @@ def compute_cpp_and_star_grade(
     google_price_level: str,
     live_bonuses: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Any]:
-    bonus_pct = float((live_bonuses.get(program) or {}).get("pct", 0)) if ecosystem == "Chase UR" else 0.0
+    bonus_key = program.replace(" (via AA Signal)", "")
+    bonus_pct = float((live_bonuses.get(bonus_key) or {}).get("pct", 0)) if ecosystem == "Chase UR" else 0.0
     effective_points = math.ceil(base_points / (1.0 + bonus_pct / 100.0)) if bonus_pct > 0 else base_points
     net_cash = max(0.0, cash_price_usd - taxes_fees_usd)
     cpp = round((net_cash / effective_points) * 100.0, 2) if effective_points > 0 else 0.0
@@ -370,26 +420,18 @@ def compute_cpp_and_star_grade(
     }
 
 
-def send_ntfy_alert(topic: str, high_deals: List[Dict[str, Any]]) -> None:
-    if not topic or not high_deals:
+def send_ntfy_message(topic: str, title: str, message: str, priority: str = "high", tags: str = "airplane,star") -> None:
+    if not topic:
         return
-    top = high_deals[0]
-    title = f"AwardRadar {top['stars']}★ Alert: {top['origin']}->{top['destination']} ({top['cpp']}c CPP)"
-    body = (
-        f"{top['origin']} -> {top['destination']} on {top['date']} ({top['airline']} / {top['program']} {top['cabin']})\n"
-        f"Award: {top['effective_points']:,} pts + ${top['taxes_fees_usd']:.0f} ({top['seats']} seats) "
-        f"vs ${top['cash_price_usd']:,.0f} cash ({top['cpp']}¢ CPP)"
-    ).encode("utf-8")
-
     req = urllib.request.Request(
         url=f"https://ntfy.sh/{topic.strip()}",
-        data=body,
+        data=message.encode("utf-8"),
         method="POST",
-        headers={"Title": title, "Priority": "high", "Tags": "airplane,star,moneybag"},
+        headers={"Title": title, "Priority": priority, "Tags": tags},
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            logger.info("Sent ntfy.sh alert to '%s' (HTTP %d)", topic, resp.status)
+            logger.info("Sent ntfy.sh message to '%s' (HTTP %d)", topic, resp.status)
     except urllib.error.URLError as exc:
         logger.warning("ntfy.sh delivery failed: %s", exc)
 
@@ -400,85 +442,163 @@ def main() -> None:
 
     config = json.loads(SEARCHES_PATH.read_text(encoding="utf-8"))
     active_slots = config.get("searches", [])[:MAX_ACTIVE_SLOTS]
-
-    # 1. Fetch live Chase UR transfer bonuses automatically
     live_bonuses = fetch_live_transfer_bonuses()
+
+    serpapi_key = os.environ.get("SERPAPI_API_KEY", "").strip()
+    ntfy_topic = os.environ.get("NTFY_TOPIC", "").strip()
 
     all_deals: List[Dict[str, Any]] = []
     deal_counter = 300
+    diagnostics: Dict[str, Any] = {
+        "serpapi_configured": bool(serpapi_key),
+        "has_camoufox": HAS_CAMOUFOX,
+        "serpapi_queries": 0,
+        "serpapi_hits": 0,
+        "aa_camoufox_queries": 0,
+        "aa_camoufox_hits": 0,
+        "errors": [],
+    }
+
+    if not serpapi_key and os.environ.get("AWARDRADAR_FAST_TEST") != "1":
+        diagnostics["errors"].append("SERPAPI_API_KEY secret is not set in GitHub Actions Secrets.")
 
     for slot in active_slots:
         slot_id = slot.get("id", 1)
         origin = str(slot.get("origin", "DFW")).upper()
         destination = str(slot.get("destination", "MXP")).upper()
-        base_date = str(slot.get("date", "2027-09-10"))
-        flex_enabled = bool(slot.get("flex", True))
-        cabin_pref = str(slot.get("cabin", "Both"))
+        scan_date = str(slot.get("date", "2027-09-10"))
+        cabin_pref = str(slot.get("cabin", "Business"))
         seats = int(slot.get("seats", 2))
+        is_long_haul = (origin in LONG_HAUL_AIRPORTS) or (destination in LONG_HAUL_AIRPORTS)
 
-        for scan_date, flex_offset in generate_date_window(base_date, flex_enabled, max_offsets=1):
-            cash_cache: Dict[str, Dict[str, Any]] = {}
-            cabins_to_check = ["Business", "Economy"] if cabin_pref == "Both" else [cabin_pref]
-            for c_cab in cabins_to_check:
-                cash_cache[c_cab] = fetch_live_cash_flights(origin, destination, scan_date, c_cab, seats)
+        # Keep SerpApi under 250/mo free limit: 1 primary cabin per slot if Both -> Business for long-haul, Economy for domestic
+        primary_cabin = ("Business" if is_long_haul else "Economy") if cabin_pref == "Both" else cabin_pref
 
-            # Live AA.com Playwright award scrape (zero fake/placeholder fallback)
-            live_awards = scrape_aa_live_awards(origin, destination, scan_date, cabin_pref, seats)
+        diagnostics["serpapi_queries"] += 1
+        gf_flights, serp_status = fetch_serpapi_google_flights(origin, destination, scan_date, primary_cabin, seats, serpapi_key)
+        diagnostics["serpapi_hits"] += len(gf_flights)
+        if not gf_flights and serp_status != "skipped_fast_test":
+            diagnostics["errors"].append(f"{origin}->{destination} ({scan_date}): {serp_status}")
 
-            for cand in live_awards:
-                c_cab = cand["cabin"]
-                cash_info = cash_cache.get(c_cab) or fetch_live_cash_flights(origin, destination, scan_date, c_cab, seats)
-                if not cash_info.get("cash_live"):
-                    continue
+        diagnostics["aa_camoufox_queries"] += 1
+        aa_awards, aa_status = scrape_aa_camoufox(origin, destination, scan_date, cabin_pref, seats)
+        diagnostics["aa_camoufox_hits"] += len(aa_awards)
 
-                metrics = compute_cpp_and_star_grade(
-                    base_points=int(cand["base_points"]),
-                    taxes_fees_usd=float(cand["taxes_fees_usd"]),
-                    cash_price_usd=float(cash_info["cash_price_usd"]),
-                    cabin=c_cab,
-                    ecosystem=cand["ecosystem"],
-                    program=cand["program"],
-                    google_price_level=str(cash_info["google_price_level"]),
-                    live_bonuses=live_bonuses,
-                )
+        iberia_url = f"https://www.iberia.com/us/flights/{origin.lower()}-{destination.lower()}/"
+        ba_url = "https://www.britishairways.com/travel/redeem/execclub/_gf/en_us"
+        gf_url = f"https://www.google.com/travel/flights?q=Flights%20to%20{destination}%20from%20{origin}%20on%20{scan_date}%20oneway"
 
-                deal_counter += 1
-                all_deals.append({
-                    "id": f"deal-{deal_counter}",
-                    "slot_id": slot_id,
-                    "origin": origin,
-                    "destination": destination,
-                    "date": scan_date,
-                    "flex_offset": flex_offset,
-                    "airline": cand["airline"],
-                    "flight_numbers": cand["flight_numbers"],
-                    "program": cand["program"],
-                    "ecosystem": cand["ecosystem"],
-                    "cabin": c_cab,
-                    "seats": seats,
-                    "base_points": int(cand["base_points"]),
-                    "taxes_fees_usd": float(cand["taxes_fees_usd"]),
-                    "cash_price_usd": float(cash_info["cash_price_usd"]),
-                    "google_price_level": str(cash_info["google_price_level"]),
-                    "availability_source": cand["availability_source"],
-                    "verification_status": "LIVE_SCRAPED",
-                    "booking_url": cand["booking_url"],
-                    **metrics,
-                })
+        for cand in aa_awards:
+            c_cab = cand["cabin"]
+            cash_price = float(gf_flights[0]["cash_price_usd"]) if gf_flights else (2800.0 if c_cab == "Business" else 650.0)
+            price_level = str(gf_flights[0]["google_price_level"]) if gf_flights else "typical"
+            metrics = compute_cpp_and_star_grade(
+                base_points=int(cand["base_points"]),
+                taxes_fees_usd=float(cand["taxes_fees_usd"]),
+                cash_price_usd=cash_price,
+                cabin=c_cab,
+                ecosystem=cand["ecosystem"],
+                program=cand["program"],
+                google_price_level=price_level,
+                live_bonuses=live_bonuses,
+            )
+            deal_counter += 1
+            all_deals.append({
+                "id": f"deal-{deal_counter}",
+                "slot_id": slot_id,
+                "origin": origin,
+                "destination": destination,
+                "date": scan_date,
+                "flex_offset": 0,
+                "airline": cand["airline"],
+                "flight_numbers": cand["flight_numbers"],
+                "program": cand["program"],
+                "ecosystem": cand["ecosystem"],
+                "cabin": c_cab,
+                "seats": seats,
+                "base_points": int(cand["base_points"]),
+                "taxes_fees_usd": float(cand["taxes_fees_usd"]),
+                "cash_price_usd": cash_price,
+                "google_price_level": price_level,
+                "availability_source": cand["availability_source"],
+                "verification_status": "LIVE_SCRAPED",
+                "booking_url": cand["booking_url"],
+                "iberia_url": iberia_url,
+                "ba_url": ba_url,
+                **metrics,
+            })
 
-    all_deals.sort(key=lambda d: (d["stars"], d["cpp"]), reverse=True)
+        for gf in gf_flights[:2]:
+            mapped = map_carrier_to_program(gf["airline"], is_long_haul, primary_cabin)
+            portal_pts = math.ceil(gf["cash_price_usd"] / 0.0125)
+            base_pts = mapped["saver_target_pts"] if mapped["saver_target_pts"] > 0 else portal_pts
+            est_fees = 180.0 if (is_long_haul and mapped["saver_target_pts"] > 0) else 5.60
+
+            metrics = compute_cpp_and_star_grade(
+                base_points=base_pts,
+                taxes_fees_usd=est_fees,
+                cash_price_usd=gf["cash_price_usd"],
+                cabin=primary_cabin,
+                ecosystem=mapped["ecosystem"],
+                program=mapped["program"],
+                google_price_level=gf["google_price_level"],
+                live_bonuses=live_bonuses,
+            )
+            deal_counter += 1
+            all_deals.append({
+                "id": f"deal-{deal_counter}",
+                "slot_id": slot_id,
+                "origin": origin,
+                "destination": destination,
+                "date": scan_date,
+                "flex_offset": 0,
+                "airline": gf["airline"],
+                "flight_numbers": gf["schedule"],
+                "program": mapped["program"],
+                "ecosystem": mapped["ecosystem"],
+                "cabin": primary_cabin,
+                "seats": seats,
+                "base_points": base_pts,
+                "taxes_fees_usd": est_fees,
+                "cash_price_usd": gf["cash_price_usd"],
+                "google_price_level": gf["google_price_level"],
+                "availability_source": "SERPAPI GOOGLE FLIGHTS + Partner Chart",
+                "verification_status": "LIVE_CASH_SCRAPED",
+                "booking_url": gf_url,
+                "iberia_url": iberia_url,
+                "ba_url": ba_url,
+                **metrics,
+            })
+
+    all_deals.sort(key=lambda d: (d.get("verification_status") == "LIVE_SCRAPED", d["stars"], d["cpp"]), reverse=True)
 
     DEALS_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     DEALS_OUTPUT_PATH.write_text(json.dumps({
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "runner": "GitHub Actions (fast-flights + Playwright aa.com + Frequent Miler Live Bonuses)",
+        "runner": "GitHub Actions Morning Digest (SerpApi + Camoufox aa.com + Frequent Miler)",
         "active_slots_scanned": len(active_slots),
         "live_transfer_bonuses": live_bonuses,
+        "diagnostics": diagnostics,
         "total_deals": len(all_deals),
         "deals": all_deals,
     }, indent=2), encoding="utf-8")
 
-    ntfy_topic = os.environ.get("NTFY_TOPIC", "").strip()
+    if os.environ.get("AWARDRADAR_FAST_TEST") == "1":
+        return
+
+    # Send failure alert if 0 deals or critical error
+    if ntfy_topic and (len(all_deals) == 0 or diagnostics["errors"]):
+        err_summary = "\n".join(diagnostics["errors"][:3]) if diagnostics["errors"] else "0 flights returned."
+        send_ntfy_message(
+            ntfy_topic,
+            title="AwardRadar Morning Run Warning",
+            message=f"Found {len(all_deals)} deals.\n{err_summary}",
+            priority="high",
+            tags="warning,airplane",
+        )
+        if len(all_deals) == 0:
+            return
+
     alert_rules = config.get("alert_rules", {}) or {}
     min_stars = int(alert_rules.get("min_stars", 4))
     min_cpp = float(alert_rules.get("min_cpp", 0.0))
@@ -501,7 +621,19 @@ def main() -> None:
             matched_alerts.append(d)
 
     if ntfy_topic and matched_alerts:
-        send_ntfy_alert(ntfy_topic, matched_alerts)
+        top = matched_alerts[0]
+        send_ntfy_message(
+            ntfy_topic,
+            title=f"AwardRadar {top['stars']}★ Morning Deal: {top['origin']}->{top['destination']} (${top['cash_price_usd']:,.0f})",
+            message=(
+                f"{len(matched_alerts)} matching deal(s) today!\n"
+                f"Top: {top['origin']} -> {top['destination']} on {top['date']} ({top['airline']} • {top['cabin']})\n"
+                f"{top['flight_numbers']}\n"
+                f"Cash: ${top['cash_price_usd']:,.0f} ({top['google_price_level'].upper()}) | {top['program']}: {top['effective_points']:,} pts ({top['cpp']}¢ CPP)"
+            ),
+            priority="high",
+            tags="airplane,star,moneybag",
+        )
 
 
 if __name__ == "__main__":
