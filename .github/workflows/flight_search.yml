@@ -29,6 +29,7 @@ jobs:
       - name: Run AwardRadar Live Flight & Award Engine
         env:
           SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SEATS_AERO_API_KEY: ${{ secrets.SEATS_AERO_API_KEY }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NFTY_TOPIC: ${{ secrets.NFTY_TOPIC }}
