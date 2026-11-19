@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-19T16:01:55.455996+00:00",
+  "updated_at": "2026-11-19T16:07:03.548037+00:00",
   "app_version": "v2.8",
   "ntfy_status": "HTTP 200 (0 alert(s))",
   "ai_parser_active": true,
@@ -67,7 +67,7 @@
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+SIN+from+SFO+on+2027-01-03+oneway+economy",
       "matched_search": false,
       "is_unicorn_dfw_dal": false,
-      "found_at": "2026-11-19T16:01:51.709378+00:00",
+      "found_at": "2026-11-19T16:07:01.193832+00:00",
       "base_miles": 59040,
       "transfer_bonus_pct": 0,
       "transfer_bonus_expires": null
@@ -107,7 +107,7 @@
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+SIN+from+LAX+on+2027-01-03+oneway+economy",
       "matched_search": false,
       "is_unicorn_dfw_dal": false,
-      "found_at": "2026-11-19T16:01:51.709780+00:00",
+      "found_at": "2026-11-19T16:07:01.194415+00:00",
       "base_miles": 50320,
       "transfer_bonus_pct": 0,
       "transfer_bonus_expires": null
@@ -149,7 +149,7 @@
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+MXP+from+DFW+on+2027-09-10+oneway+economy+American",
       "matched_search": true,
       "is_unicorn_dfw_dal": false,
-      "found_at": "2026-11-19T16:01:16.942591+00:00",
+      "found_at": "2026-11-19T16:06:31.084978+00:00",
       "is_cash_deal": true,
       "base_miles": 0,
       "transfer_bonus_pct": 0,
@@ -192,7 +192,7 @@
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+MXP+from+DFW+on+2027-09-10+oneway+economy+Iberia",
       "matched_search": true,
       "is_unicorn_dfw_dal": false,
-      "found_at": "2026-11-19T16:01:16.942632+00:00",
+      "found_at": "2026-11-19T16:06:31.085045+00:00",
       "is_cash_deal": true,
       "base_miles": 0,
       "transfer_bonus_pct": 0,
