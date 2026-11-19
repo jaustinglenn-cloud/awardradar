@@ -16,7 +16,7 @@
     "Virgin Atlantic"
   ],
   "alert_config": {
-    "min_grade": 2,
+    "min_grade": 4,
     "alert_dfw_dal_unicorns": true
   },
   "searches": [
@@ -67,24 +67,6 @@
       "max_points": 25000,
       "min_cpp": 1.5,
       "dates": "2026-12-24 to 2026-12-31",
-      "currencies": [
-        "Chase UR",
-        "American AAdvantage",
-        "Delta SkyMiles"
-      ],
-      "active": true
-    },
-    {
-      "id": "cfg-1795102321765",
-      "name": "Test Italy",
-      "origin": "DFW",
-      "destination": "MXP",
-      "start_date": "2027-11-02",
-      "end_date": "2027-11-11",
-      "cabin": "Any",
-      "max_points": 75000,
-      "min_cpp": 2,
-      "dates": "2027-11-02 to 2027-11-11",
       "currencies": [
         "Chase UR",
         "American AAdvantage",
