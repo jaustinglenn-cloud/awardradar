@@ -7,9 +7,10 @@ $0 self-hosted backend executed daily at 7:00 AM CT (13:00 UTC) via GitHub Actio
 1. SerpApi Google Flights Engine (250 free searches/mo):
    Reliable live cash fares, real airlines, flight numbers, durations, stops,
    and Google's price_insights ('low', 'typical', 'high') with zero bot blocks.
-2. Camoufox Stealth AA.com Award Scraper:
-   Uses anti-detect Firefox (Camoufox) to intercept aa.com/booking/api/search/itinerary
-   for live AAdvantage miles AND oneworld partner saver signals (BA & Iberia).
+2. Camoufox / Playwright Firefox Stealth AA.com Award Scraper:
+   Uses anti-detect Firefox (Camoufox, with automatic Playwright Firefox fallback)
+   to intercept aa.com/booking/api/search/itinerary for live AAdvantage miles AND
+   oneworld partner saver signals (BA & Iberia).
 3. Live Transfer Bonus Tracker (Frequent Miler):
    Scrapes https://frequentmiler.com/current-point-transfer-bonuses/ for active
    Chase Ultimate Rewards airline transfer bonuses.
@@ -52,6 +53,12 @@ try:
 except ImportError:
     HAS_CAMOUFOX = False
 
+try:
+    from playwright.sync_api import sync_playwright  # type: ignore
+    HAS_PLAYWRIGHT = True
+except ImportError:
+    HAS_PLAYWRIGHT = False
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 SEARCHES_PATH = ROOT_DIR / "searches.json"
 DEALS_OUTPUT_PATH = ROOT_DIR / "data" / "deals.json"
@@ -92,7 +99,7 @@ def fetch_live_transfer_bonuses() -> Dict[str, Dict[str, Any]]:
     try:
         resp = requests.get(
             url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; AwardRadar/2.0)"},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; AwardRadar/2.1)"},
             timeout=15,
         )
         if resp.status_code != 200:
@@ -143,8 +150,6 @@ def fetch_serpapi_google_flights(
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
     Queries SerpApi's Google Flights engine (free tier: 250 searches/month).
-    Returns up to 3 real live itineraries with airline, flight numbers, schedule,
-    USD cash price, and Google's price_insights price_level.
     """
     if os.environ.get("AWARDRADAR_FAST_TEST") == "1":
         return [], "skipped_fast_test"
@@ -153,13 +158,13 @@ def fetch_serpapi_google_flights(
     if not HAS_REQUESTS:
         return [], "missing_requests_pkg"
 
-    travel_class = 3 if cabin == "Business" else 1  # 1=Economy, 3=Business
+    travel_class = 3 if cabin == "Business" else 1
     params = {
         "engine": "google_flights",
         "departure_id": origin,
         "arrival_id": destination,
         "outbound_date": departure_date,
-        "type": 2,  # 2 = One-way
+        "type": 2,
         "travel_class": travel_class,
         "adults": max(1, min(4, seats)),
         "currency": "USD",
@@ -223,7 +228,62 @@ def fetch_serpapi_google_flights(
         return [], f"serpapi_exception: {exc}"
 
 
-def scrape_aa_camoufox(
+def _parse_aa_payloads(captured_payloads: List[Dict[str, Any]], cabin: str, aa_url: str) -> List[Dict[str, Any]]:
+    scraped_deals: List[Dict[str, Any]] = []
+    for payload in captured_payloads:
+        for sl in (payload.get("slices", []) or [])[:8]:
+            segments = sl.get("segments", []) or []
+            flight_nums = " / ".join(
+                f"{seg.get('flight', {}).get('carrierCode', 'AA')} {seg.get('flight', {}).get('flightNumber', '')}".strip()
+                for seg in segments
+            )
+            airline_names = " / ".join(
+                sorted({seg.get("flight", {}).get("carrierName", "American Airlines") for seg in segments})
+            )
+            low_airline = airline_names.lower()
+            is_ib = "iberia" in low_airline
+            is_ba = "british" in low_airline
+
+            for pd in (sl.get("pricingDetail", []) or []):
+                if not pd.get("productAvailable", False):
+                    continue
+                prod_type = str(pd.get("productType", "")).upper()
+                mapped_cabin = "Business" if prod_type in {"BUSINESS", "FIRST", "FLAGSHIP_BUSINESS"} else "Economy"
+                if cabin != "Both" and mapped_cabin != cabin:
+                    continue
+                pts = int(pd.get("perPassengerAwardPoints", 0) or 0)
+                taxes = float((pd.get("perPassengerTaxesAndFees", {}) or {}).get("amount", 0.0) or 0.0)
+                if pts > 0:
+                    if is_ib:
+                        src_label = "PARTNER SAVER SIGNAL (aa.com -> Iberia Plus)"
+                        prog_name = "Iberia Plus (via AA Signal)"
+                        eco_name = "Chase UR"
+                    elif is_ba:
+                        src_label = "PARTNER SAVER SIGNAL (aa.com -> BA Avios)"
+                        prog_name = "British Airways Avios (via AA Signal)"
+                        eco_name = "Chase UR"
+                    else:
+                        src_label = "LIVE SCRAPED (aa.com)"
+                        prog_name = "AAdvantage"
+                        eco_name = "AAdvantage"
+
+                    scraped_deals.append({
+                        "airline": airline_names or "American Airlines",
+                        "flight_numbers": flight_nums or "AA Award",
+                        "program": prog_name,
+                        "ecosystem": eco_name,
+                        "cabin": mapped_cabin,
+                        "base_points": pts,
+                        "taxes_fees_usd": round(taxes, 2),
+                        "availability_source": src_label,
+                        "verification_status": "LIVE_SCRAPED",
+                        "booking_url": aa_url,
+                    })
+                    break
+    return scraped_deals
+
+
+def scrape_aa_awards_stealth(
     origin: str,
     destination: str,
     departure_date: str,
@@ -231,94 +291,70 @@ def scrape_aa_camoufox(
     seats: int,
 ) -> Tuple[List[Dict[str, Any]], str]:
     """
-    Unauthenticated Camoufox (anti-detect Firefox) scraper for aa.com.
-    Intercepts /booking/api/search/itinerary for live AAdvantage miles AND
-    oneworld partner saver signals (British Airways & Iberia).
+    Tries Camoufox (anti-detect Firefox) first, falling back cleanly to Playwright Firefox
+    if Camoufox's GitHub binary release is unavailable. Never crashes the pipeline.
     """
-    if not HAS_CAMOUFOX or os.environ.get("AWARDRADAR_FAST_TEST") == "1":
-        return [], "camoufox_skipped"
+    if os.environ.get("AWARDRADAR_FAST_TEST") == "1":
+        return [], "skipped_fast_test"
 
-    scraped_deals: List[Dict[str, Any]] = []
+    aa_url = (
+        f"https://www.aa.com/booking/search?locale=en_US&pax={seats}&adult={seats}"
+        f"&type=OneWay&searchType=Award&cabin=&carriers=ALL"
+        f"&slices=%5B%7B%22orig%22:%22{origin}%22,%22origNearby%22:false,"
+        f"%22dest%22:%22{destination}%22,%22destNearby%22:false,"
+        f"%22date%22:%22{departure_date}%22%7D%5D"
+    )
     captured_payloads: List[Dict[str, Any]] = []
 
-    try:
-        sleep_with_jitter(f"Camoufox AA.com {origin}->{destination} {departure_date}")
-        aa_url = (
-            f"https://www.aa.com/booking/search?locale=en_US&pax={seats}&adult={seats}"
-            f"&type=OneWay&searchType=Award&cabin=&carriers=ALL"
-            f"&slices=%5B%7B%22orig%22:%22{origin}%22,%22origNearby%22:false,"
-            f"%22dest%22:%22{destination}%22,%22destNearby%22:false,"
-            f"%22date%22:%22{departure_date}%22%7D%5D"
-        )
+    if HAS_CAMOUFOX:
+        try:
+            sleep_with_jitter(f"Camoufox AA.com {origin}->{destination} {departure_date}")
+            with Camoufox(headless=True) as browser:
+                page = browser.new_page()
 
-        with Camoufox(headless=True) as browser:
-            page = browser.new_page()
+                def handle_response(response) -> None:
+                    if "booking/api/search/itinerary" in response.url and response.status == 200:
+                        try:
+                            captured_payloads.append(response.json())
+                        except Exception:
+                            pass
 
-            def handle_response(response) -> None:
-                if "booking/api/search/itinerary" in response.url and response.status == 200:
-                    try:
-                        captured_payloads.append(response.json())
-                    except Exception:
-                        pass
+                page.on("response", handle_response)
+                page.goto(aa_url, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(10000)
 
-            page.on("response", handle_response)
-            page.goto(aa_url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(10000)
+            deals = _parse_aa_payloads(captured_payloads, cabin, aa_url)
+            return deals, f"camoufox_{len(deals)}_hits"
+        except Exception as exc:
+            logger.warning("Camoufox AA.com skipped/failed (%s); trying Playwright Firefox fallback.", exc)
 
-        for payload in captured_payloads:
-            for sl in (payload.get("slices", []) or [])[:8]:
-                segments = sl.get("segments", []) or []
-                flight_nums = " / ".join(
-                    f"{seg.get('flight', {}).get('carrierCode', 'AA')} {seg.get('flight', {}).get('flightNumber', '')}".strip()
-                    for seg in segments
-                )
-                airline_names = " / ".join(
-                    sorted({seg.get("flight", {}).get("carrierName", "American Airlines") for seg in segments})
-                )
-                low_airline = airline_names.lower()
-                is_ib = "iberia" in low_airline
-                is_ba = "british" in low_airline
+    if HAS_PLAYWRIGHT:
+        try:
+            sleep_with_jitter(f"Playwright Firefox AA.com {origin}->{destination} {departure_date}")
+            with sync_playwright() as p:
+                browser = p.firefox.launch(headless=True)
+                context = browser.new_context(viewport={"width": 1280, "height": 800}, locale="en-US")
+                page = context.new_page()
 
-                for pd in (sl.get("pricingDetail", []) or []):
-                    if not pd.get("productAvailable", False):
-                        continue
-                    prod_type = str(pd.get("productType", "")).upper()
-                    mapped_cabin = "Business" if prod_type in {"BUSINESS", "FIRST", "FLAGSHIP_BUSINESS"} else "Economy"
-                    if cabin != "Both" and mapped_cabin != cabin:
-                        continue
-                    pts = int(pd.get("perPassengerAwardPoints", 0) or 0)
-                    taxes = float((pd.get("perPassengerTaxesAndFees", {}) or {}).get("amount", 0.0) or 0.0)
-                    if pts > 0:
-                        if is_ib:
-                            src_label = "PARTNER SAVER SIGNAL (aa.com -> Iberia Plus)"
-                            prog_name = "Iberia Plus (via AA Signal)"
-                            eco_name = "Chase UR"
-                        elif is_ba:
-                            src_label = "PARTNER SAVER SIGNAL (aa.com -> BA Avios)"
-                            prog_name = "British Airways Avios (via AA Signal)"
-                            eco_name = "Chase UR"
-                        else:
-                            src_label = "LIVE SCRAPED (aa.com Camoufox)"
-                            prog_name = "AAdvantage"
-                            eco_name = "AAdvantage"
+                def handle_pw_response(response) -> None:
+                    if "booking/api/search/itinerary" in response.url and response.status == 200:
+                        try:
+                            captured_payloads.append(response.json())
+                        except Exception:
+                            pass
 
-                        scraped_deals.append({
-                            "airline": airline_names or "American Airlines",
-                            "flight_numbers": flight_nums or "AA Award",
-                            "program": prog_name,
-                            "ecosystem": eco_name,
-                            "cabin": mapped_cabin,
-                            "base_points": pts,
-                            "taxes_fees_usd": round(taxes, 2),
-                            "availability_source": src_label,
-                            "verification_status": "LIVE_SCRAPED",
-                            "booking_url": aa_url,
-                        })
-                        break
-        return scraped_deals, f"ok_{len(scraped_deals)}_hits"
-    except Exception as exc:
-        logger.warning("Camoufox AA.com blocked/timeout for %s->%s (%s): %s", origin, destination, departure_date, exc)
-        return [], f"camoufox_blocked_or_timeout: {exc}"
+                page.on("response", handle_pw_response)
+                page.goto(aa_url, wait_until="domcontentloaded", timeout=25000)
+                page.wait_for_timeout(8500)
+                browser.close()
+
+            deals = _parse_aa_payloads(captured_payloads, cabin, aa_url)
+            return deals, f"pw_firefox_{len(deals)}_hits"
+        except Exception as exc:
+            logger.warning("Playwright Firefox AA.com failed (%s).", exc)
+            return [], f"aa_blocked_or_err: {exc}"
+
+    return [], "no_browser_available"
 
 
 def map_carrier_to_program(airline_name: str, is_long_haul: bool, cabin: str) -> Dict[str, Any]:
@@ -452,10 +488,11 @@ def main() -> None:
     diagnostics: Dict[str, Any] = {
         "serpapi_configured": bool(serpapi_key),
         "has_camoufox": HAS_CAMOUFOX,
+        "has_playwright": HAS_PLAYWRIGHT,
         "serpapi_queries": 0,
         "serpapi_hits": 0,
-        "aa_camoufox_queries": 0,
-        "aa_camoufox_hits": 0,
+        "aa_queries": 0,
+        "aa_hits": 0,
         "errors": [],
     }
 
@@ -471,7 +508,6 @@ def main() -> None:
         seats = int(slot.get("seats", 2))
         is_long_haul = (origin in LONG_HAUL_AIRPORTS) or (destination in LONG_HAUL_AIRPORTS)
 
-        # Keep SerpApi under 250/mo free limit: 1 primary cabin per slot if Both -> Business for long-haul, Economy for domestic
         primary_cabin = ("Business" if is_long_haul else "Economy") if cabin_pref == "Both" else cabin_pref
 
         diagnostics["serpapi_queries"] += 1
@@ -480,9 +516,9 @@ def main() -> None:
         if not gf_flights and serp_status != "skipped_fast_test":
             diagnostics["errors"].append(f"{origin}->{destination} ({scan_date}): {serp_status}")
 
-        diagnostics["aa_camoufox_queries"] += 1
-        aa_awards, aa_status = scrape_aa_camoufox(origin, destination, scan_date, cabin_pref, seats)
-        diagnostics["aa_camoufox_hits"] += len(aa_awards)
+        diagnostics["aa_queries"] += 1
+        aa_awards, aa_status = scrape_aa_awards_stealth(origin, destination, scan_date, cabin_pref, seats)
+        diagnostics["aa_hits"] += len(aa_awards)
 
         iberia_url = f"https://www.iberia.com/us/flights/{origin.lower()}-{destination.lower()}/"
         ba_url = "https://www.britishairways.com/travel/redeem/execclub/_gf/en_us"
@@ -575,7 +611,7 @@ def main() -> None:
     DEALS_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     DEALS_OUTPUT_PATH.write_text(json.dumps({
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "runner": "GitHub Actions Morning Digest (SerpApi + Camoufox aa.com + Frequent Miler)",
+        "runner": "GitHub Actions Morning Digest (SerpApi + Firefox/Camoufox aa.com + Frequent Miler)",
         "active_slots_scanned": len(active_slots),
         "live_transfer_bonuses": live_bonuses,
         "diagnostics": diagnostics,
@@ -586,7 +622,6 @@ def main() -> None:
     if os.environ.get("AWARDRADAR_FAST_TEST") == "1":
         return
 
-    # Send failure alert if 0 deals or critical error
     if ntfy_topic and (len(all_deals) == 0 or diagnostics["errors"]):
         err_summary = "\n".join(diagnostics["errors"][:3]) if diagnostics["errors"] else "0 flights returned."
         send_ntfy_message(
