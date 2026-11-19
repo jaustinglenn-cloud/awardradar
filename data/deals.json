@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-19T13:42:19.500Z",
+  "updated_at": "2026-11-19T13:54:31.987Z",
   "total_count": 7,
   "deals": [
     {
@@ -34,7 +34,7 @@
       "seatsaero_url": "https://seats.aero/search?origins=DFW&destinations=HND",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+HND+from+DFW",
       "is_unicorn_dfw_dal": true,
-      "found_at": "2026-11-19T13:24:19.499Z"
+      "found_at": "2026-11-19T13:36:31.987Z"
     },
     {
       "id": "deal-dfw-mxp-j",
@@ -68,7 +68,7 @@
       "pointsyeah_url": "https://www.pointsyeah.com/",
       "seatsaero_url": "https://seats.aero/search?origins=DFW&destinations=MXP",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+MXP+from+DFW",
-      "found_at": "2026-11-19T13:07:19.499Z"
+      "found_at": "2026-11-19T13:19:31.987Z"
     },
     {
       "id": "deal-vce-dfw-j",
@@ -103,7 +103,7 @@
       "pointsyeah_url": "https://www.pointsyeah.com/",
       "seatsaero_url": "https://seats.aero/search?origins=VCE&destinations=DFW",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+DFW+from+VCE",
-      "found_at": "2026-11-19T12:37:19.499Z"
+      "found_at": "2026-11-19T12:49:31.987Z"
     },
     {
       "id": "deal-dfw-zrh-j",
@@ -135,7 +135,7 @@
       "pointsyeah_url": "https://www.pointsyeah.com/",
       "seatsaero_url": "https://seats.aero/search?origins=DFW&destinations=ZRH",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+ZRH+from+DFW",
-      "found_at": "2026-11-19T12:07:19.499Z"
+      "found_at": "2026-11-19T12:19:31.987Z"
     },
     {
       "id": "deal-dfw-mxp-y",
@@ -169,7 +169,7 @@
       "pointsyeah_url": "https://www.pointsyeah.com/",
       "seatsaero_url": "https://seats.aero/search?origins=DFW&destinations=MXP",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+MXP+from+DFW",
-      "found_at": "2026-11-19T11:37:19.499Z"
+      "found_at": "2026-11-19T11:49:31.987Z"
     },
     {
       "id": "deal-dal-lgb-y",
@@ -201,7 +201,7 @@
       "pointsyeah_url": "https://www.pointsyeah.com/",
       "seatsaero_url": "https://seats.aero/search?origins=DAL&destinations=LGB",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+LGB+from+DAL",
-      "found_at": "2026-11-19T11:02:19.499Z"
+      "found_at": "2026-11-19T11:14:31.987Z"
     },
     {
       "id": "deal-dal-lax-dl",
@@ -234,7 +234,7 @@
       "pointsyeah_url": "https://www.pointsyeah.com/",
       "seatsaero_url": "https://seats.aero/search?origins=DAL&destinations=LAX",
       "google_flights_url": "https://www.google.com/travel/flights?q=Flights+to+LAX+from+DAL",
-      "found_at": "2026-11-19T10:12:19.499Z"
+      "found_at": "2026-11-19T10:24:31.987Z"
     }
   ]
 }
