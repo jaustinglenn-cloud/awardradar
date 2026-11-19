@@ -16,7 +16,7 @@
     "Virgin Atlantic"
   ],
   "alert_config": {
-    "min_grade": 4,
+    "min_grade": 3,
     "alert_dfw_dal_unicorns": true
   },
   "searches": [
