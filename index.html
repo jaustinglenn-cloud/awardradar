@@ -354,15 +354,18 @@
     balances: { chase_ur: 130000, delta_skymiles: 35000, aa_miles: 25000, delta_takeoff15: 1 },
     deals: []
   };
-
   function buildDeepLinks() {
+    const pyBase = 'https://www.pointsyeah.com/search?airlineProgram=AR%2CAM%2CAC%2CKL%2CAS%2CAA%2CAV%2CDL%2CEK%2CET%2CB6%2CLH%2CQF%2CSK%2CWN%2CTK%2CUA%2CVS%2CVA&adults=2&children=0';
+    const roameBase = 'https://roame.travel/search?selectedCards=chase&selectedPrograms=ALL&programSelectionMode=include&maxStops=2&viewType=List&originType=airport&destinationType=airport&flexibleDates=0&pax=2&isSkyview=false';
+
     // Trip 1: Northern Italy (Sept 7-15, 2027, 2 Pax)
     const italyLinks = [
-      { label: 'PointsYeah: DFW→MXP (Biz)', url: 'https://www.pointsyeah.com/search?departure=DFW&arrival=MXP&departDate=2027-09-07&cabin=Business&passengers=2&tripType=oneway' },
-      { label: 'PointsYeah: DFW→VCE (Biz)', url: 'https://www.pointsyeah.com/search?departure=DFW&arrival=VCE&departDate=2027-09-07&cabin=Business&passengers=2&tripType=oneway' },
-      { label: 'PointsYeah: DFW→FCO (Biz)', url: 'https://www.pointsyeah.com/search?departure=DFW&arrival=FCO&departDate=2027-09-07&cabin=Business&passengers=2&tripType=oneway' },
-      { label: 'PointsYeah: MXP→DFW (Econ)', url: 'https://www.pointsyeah.com/search?departure=MXP&arrival=DFW&departDate=2027-09-15&cabin=Economy&passengers=2&tripType=oneway' },
-      { label: 'Roame: DFW→Italy Sept 2027', url: 'https://roame.travel/search?origin=DFW&destination=MXP&date=2027-09-07&pax=2&cabin=business' },
+      { label: 'PointsYeah: DFW→MXP (Biz)', url: `${pyBase}&cabins=Business%2CFirst&cabin=Business&banks=Chase&tripType=1&departure=DFW&arrival=MXP&departDate=2027-09-07&departDateSec=2027-09-10&multiday=true` },
+      { label: 'PointsYeah: DFW→VCE (Biz)', url: `${pyBase}&cabins=Business%2CFirst&cabin=Business&banks=Chase&tripType=1&departure=DFW&arrival=VCE&departDate=2027-09-07&departDateSec=2027-09-10&multiday=true` },
+      { label: 'PointsYeah: DFW→FCO (Biz)', url: `${pyBase}&cabins=Business%2CFirst&cabin=Business&banks=Chase&tripType=1&departure=DFW&arrival=FCO&departDate=2027-09-07&departDateSec=2027-09-10&multiday=true` },
+      { label: 'PointsYeah: MXP→DFW (Econ)', url: `${pyBase}&cabins=Economy%2CPremium+Economy&cabin=Economy&banks=Chase&tripType=1&departure=MXP&arrival=DFW&departDate=2027-09-15&departDateSec=2027-09-18&multiday=true` },
+      { label: 'Roame: DFW→MXP (Biz)', url: `${roameBase}&origin=DFW&destination=MXP&departureDate=2027-09-07&endDepartureDate=2027-09-07&searchClass=BIZ&fareClasses=BIZ&fareClasses=FIRST` },
+      { label: '[invalid URL]: DFW→Italy (Biz)', url: 'https://seats.aero/search?min_seats=2&applicable_cabin=business&additional_days=true&additional_days_num=7&max_fees=40000&disable_live_filtering=false&date=2027-09-07&origins=DFW&destinations=MXP,LIN,VCE,BLQ,FCO&view=default' },
       { label: 'Google Flights: Open-Jaw', url: 'https://www.google.com/travel/flights?q=Flights%20to%20MXP%20from%20DFW%20on%202027-09-07%20through%202027-09-15%202%20adults' }
     ];
 
@@ -372,9 +375,12 @@
       { label: 'Delta: DAL→LAX (Dec 23–30)', url: 'https://www.delta.com/flight-search/book-a-flight?tripType=ROUND_TRIP&originCity=DAL&destinationCity=LAX&departureDate=2026-12-23&returnDate=2026-12-30&paxCount=2&shopWithMiles=true' },
       { label: 'AA: DFW→LAX (Dec 23–30)', url: 'https://www.aa.com/booking/find-flights?tripType=roundTrip&origin=DFW&destination=LAX&departDate=2026-12-23&returnDate=2026-12-30&adult=2&awardBooking=true' },
       { label: 'Southwest: DAL→LGB (UR 1:1)', url: 'https://www.southwest.com/air/booking/select.html?originationAirportCode=DAL&destinationAirportCode=LGB&departureDate=2026-12-23&returnDate=2026-12-30&adultPassengersCount=2&fareType=POINTS' },
-      { label: 'PointsYeah: DFW/DAL→LAX/LGB', url: 'https://www.pointsyeah.com/search?departure=DFW&arrival=LAX&departDate=2026-12-23&returnDate=2026-12-30&cabin=Economy&passengers=2&tripType=roundtrip' },
+      { label: 'PointsYeah: DFW→LAX (Econ)', url: `${pyBase}&cabins=Economy%2CPremium+Economy&cabin=Economy&banks=Amex%2CBilt%2CCapital+One%2CChase%2CCiti%2CWF%2CUS+Bank&tripType=2&departure=DFW&arrival=LAX&departDate=2026-12-23&returnDate=2026-12-30&multiday=false` },
+      { label: 'Roame: DFW→LAX (Econ)', url: `${roameBase}&origin=DFW&destination=LAX&departureDate=2026-12-23&endDepartureDate=2026-12-23&searchClass=ECON&fareClasses=ECON&fareClasses=PREMECON` },
+      { label: '[invalid URL]: DFW/DAL→LA/LGB', url: 'https://seats.aero/search?min_seats=2&applicable_cabin=economy&additional_days=true&additional_days_num=3&max_fees=40000&disable_live_filtering=false&date=2026-12-23&origins=DFW,DAL&destinations=LAX,LGB&view=default' },
       { label: 'Google Flights: DFW/DAL→LA/LGB', url: 'https://www.google.com/travel/flights?q=Flights%20from%20DFW,DAL%20to%20LAX,LGB%20on%202026-12-23%20through%202026-12-30%202%20adults' }
     ];
+
 
     document.getElementById('italyLinks').innerHTML = italyLinks
       .map(l => `<a class="launch-btn" href="${l.url}" target="_blank" rel="noopener">${l.label}</a>`).join('');
